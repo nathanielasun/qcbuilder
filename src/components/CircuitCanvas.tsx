@@ -12,15 +12,23 @@ interface CircuitCanvasProps {
   circuit: CircuitState;
   numColumns: number;
   selectedGate: string | null;
-  selectedInstance: string | null;
+  selectedInstances: Set<string>;
   selectedRepeater: string | null;
   onGateAdd: (gateId: string, target: number, column: number, control?: number) => void;
   onGateMove: (instanceId: string, target: number, column: number, control?: number) => void;
-  onGateSelect: (instanceId: string | null) => void;
+  onGateSelect: (instanceId: string | null, addToSelection?: boolean) => void;
+  onMultiSelect: (instanceIds: string[]) => void;
   onGateRemove: (instanceId: string) => void;
   onGateEdit: (instanceId: string) => void;
   onRepeaterSelect: (repeaterId: string | null) => void;
   onRepeaterEdit?: (repeaterId: string) => void;
+}
+
+interface SelectionBox {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
 }
 
 const CELL_SIZE = 60;
@@ -30,11 +38,12 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
   circuit,
   numColumns,
   selectedGate,
-  selectedInstance,
+  selectedInstances,
   selectedRepeater,
   onGateAdd,
   onGateMove,
   onGateSelect,
+  onMultiSelect,
   onGateRemove,
   onGateEdit,
   onRepeaterSelect,
@@ -43,6 +52,8 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
   const canvasRef = useRef<HTMLDivElement>(null);
   const [dragOverCell, setDragOverCell] = useState<{ qubit: number; column: number } | null>(null);
   const [hoverCell, setHoverCell] = useState<{ qubit: number; column: number } | null>(null);
+  const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
+  const [isBoxSelecting, setIsBoxSelecting] = useState(false);
 
   const width = numColumns * CELL_SIZE;
   const height = circuit.numQubits * CELL_SIZE;
@@ -111,19 +122,111 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
     return !isCellOccupied(qubit, column) && !isCellOccupied(adjacentQubit, column);
   }, [circuit.numQubits, getAdjacentQubit, isCellOccupied]);
 
-  // Handle mouse move for hover highlighting
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    const cell = getCellFromPosition(e.clientX, e.clientY);
-    setHoverCell(cell);
-  }, [getCellFromPosition]);
-
   // Handle mouse leave
   const handleMouseLeave = useCallback(() => {
     setHoverCell(null);
   }, []);
 
+  // Get gates within a rectangular area
+  const getGatesInRect = useCallback((x1: number, y1: number, x2: number, y2: number): string[] => {
+    const minX = Math.min(x1, x2);
+    const maxX = Math.max(x1, x2);
+    const minY = Math.min(y1, y2);
+    const maxY = Math.max(y1, y2);
+
+    return circuit.gates
+      .filter(gate => {
+        // Calculate gate bounding box
+        const gateLeft = gate.column * CELL_SIZE;
+        const gateRight = gateLeft + CELL_SIZE;
+        let gateTop = gate.target * CELL_SIZE;
+        let gateBottom = gateTop + CELL_SIZE;
+
+        // For two-qubit gates, extend to include control
+        if (gate.control !== undefined) {
+          const controlTop = gate.control * CELL_SIZE;
+          const controlBottom = controlTop + CELL_SIZE;
+          gateTop = Math.min(gateTop, controlTop);
+          gateBottom = Math.max(gateBottom, controlBottom);
+        }
+
+        // Check if gate intersects with selection rectangle
+        return gateLeft < maxX && gateRight > minX && gateTop < maxY && gateBottom > minY;
+      })
+      .map(gate => gate.id);
+  }, [circuit.gates]);
+
+  // Handle mouse down for box selection
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    // Only start box selection on left click, and when no gate is being placed
+    if (e.button !== 0 || selectedGate) return;
+
+    // Don't start selection if clicking on a gate
+    const target = e.target as HTMLElement;
+    if (target.closest('.gate-block') || target.closest('.repeater-block')) return;
+
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    setIsBoxSelecting(true);
+    setSelectionBox({
+      startX: x,
+      startY: y,
+      currentX: x,
+      currentY: y,
+    });
+  }, [selectedGate]);
+
+  // Handle mouse move for box selection
+  const handleMouseMoveSelection = useCallback((e: React.MouseEvent) => {
+    if (!isBoxSelecting || !selectionBox) {
+      // Normal hover handling
+      const cell = getCellFromPosition(e.clientX, e.clientY);
+      setHoverCell(cell);
+      return;
+    }
+
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    setSelectionBox(prev => prev ? {
+      ...prev,
+      currentX: Math.max(0, Math.min(x, width)),
+      currentY: Math.max(0, Math.min(y, height)),
+    } : null);
+  }, [isBoxSelecting, selectionBox, getCellFromPosition, width, height]);
+
+  // Handle mouse up for box selection
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    if (!isBoxSelecting || !selectionBox) return;
+
+    // Calculate selection rectangle
+    const { startX, startY, currentX, currentY } = selectionBox;
+    const selectedIds = getGatesInRect(startX, startY, currentX, currentY);
+
+    // If shift is held, add to existing selection
+    if (e.shiftKey) {
+      const combined = new Set([...selectedInstances, ...selectedIds]);
+      onMultiSelect([...combined]);
+    } else {
+      onMultiSelect(selectedIds);
+    }
+
+    setIsBoxSelecting(false);
+    setSelectionBox(null);
+  }, [isBoxSelecting, selectionBox, getGatesInRect, selectedInstances, onMultiSelect]);
+
   // Handle canvas click
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
+    // Don't handle click if we just finished box selecting
+    if (isBoxSelecting) return;
+
     const cell = getCellFromPosition(e.clientX, e.clientY);
     if (!cell) {
       onGateSelect(null);
@@ -159,6 +262,7 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
       onGateSelect(null);
     }
   }, [
+    isBoxSelecting,
     getCellFromPosition,
     selectedGate,
     canPlaceTwoQubitGate,
@@ -348,7 +452,7 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
       const def = GATE_DEFINITIONS[gate.gateId];
       if (!def) continue;
 
-      const isSelected = selectedInstance === gate.id;
+      const isSelected = selectedInstances.has(gate.id);
 
       // Render two-qubit gate connections
       if (def.numQubits === 2 && gate.control !== undefined) {
@@ -401,7 +505,10 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
                 cursor: 'pointer',
                 zIndex: 4,
               }}
-              onClick={() => onGateSelect(gate.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onGateSelect(gate.id, e.shiftKey || e.ctrlKey || e.metaKey);
+              }}
               onDoubleClick={() => onGateEdit(gate.id)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -443,7 +550,10 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
                 cursor: 'pointer',
                 zIndex: 4,
               }}
-              onClick={() => onGateSelect(gate.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onGateSelect(gate.id, e.shiftKey || e.ctrlKey || e.metaKey);
+              }}
               onDoubleClick={() => onGateEdit(gate.id)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -501,17 +611,25 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
           }
         }
       } else {
-        // Single qubit gate
+        // Single qubit gate - wrap to handle multi-selection
         elements.push(
-          <GateBlock
-            key={`gate-${gate.id}`}
-            gate={gate}
-            isSelected={isSelected}
-            onClick={() => onGateSelect(gate.id)}
-            onDoubleClick={() => onGateEdit(gate.id)}
-            onRemove={() => onGateRemove(gate.id)}
-            cellSize={CELL_SIZE}
-          />
+          <div
+            key={`gate-wrapper-${gate.id}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onGateSelect(gate.id, e.shiftKey || e.ctrlKey || e.metaKey);
+            }}
+          >
+            <GateBlock
+              key={`gate-${gate.id}`}
+              gate={gate}
+              isSelected={isSelected}
+              onClick={() => {}} // Handled by wrapper
+              onDoubleClick={() => onGateEdit(gate.id)}
+              onRemove={() => onGateRemove(gate.id)}
+              cellSize={CELL_SIZE}
+            />
+          </div>
         );
       }
     }
@@ -646,8 +764,15 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
               overflow: 'hidden',
             }}
             onClick={handleCanvasClick}
-            onMouseMove={handleMouseMove}
-            onMouseLeave={handleMouseLeave}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMoveSelection}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={(e) => {
+              handleMouseLeave();
+              if (isBoxSelecting) {
+                handleMouseUp(e as unknown as React.MouseEvent);
+              }
+            }}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
@@ -656,6 +781,25 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
             {renderWires()}
             {renderRepeaters()}
             {renderGates()}
+
+            {/* Selection box overlay */}
+            {selectionBox && (
+              <div
+                className="selection-box"
+                style={{
+                  position: 'absolute',
+                  left: Math.min(selectionBox.startX, selectionBox.currentX),
+                  top: Math.min(selectionBox.startY, selectionBox.currentY),
+                  width: Math.abs(selectionBox.currentX - selectionBox.startX),
+                  height: Math.abs(selectionBox.currentY - selectionBox.startY),
+                  border: '2px dashed #4A90D9',
+                  backgroundColor: 'rgba(74, 144, 217, 0.15)',
+                  borderRadius: 4,
+                  pointerEvents: 'none',
+                  zIndex: 100,
+                }}
+              />
+            )}
           </div>
         </div>
       </div>

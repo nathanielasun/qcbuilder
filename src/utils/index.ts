@@ -9,3 +9,9 @@ export {
   getGateDefinition,
   formatAngle,
 } from './gateDefinitions';
+
+export {
+  validateSavedCircuit,
+  validateCircuitState,
+  type ValidationResult,
+} from './circuitValidator';

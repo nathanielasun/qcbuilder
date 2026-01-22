@@ -5,6 +5,7 @@
 import React, { useState, useCallback } from 'react';
 import { Play, Trash2, Download, Upload, Undo2, Redo2, Plus, Minus, Settings, Repeat } from 'lucide-react';
 import { SavedCircuit } from '../types/circuit';
+import { validateSavedCircuit } from '../utils/circuitValidator';
 
 interface ControlPanelProps {
   numQubits: number;
@@ -67,10 +68,23 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
       try {
         const text = await file.text();
-        const circuit = JSON.parse(text) as SavedCircuit;
-        onLoad(circuit);
+        const data = JSON.parse(text);
+
+        // Validate the circuit before loading
+        const validation = validateSavedCircuit(data);
+        if (!validation.valid) {
+          alert(`Invalid circuit file:\n\n${validation.errors.join('\n')}`);
+          return;
+        }
+
+        // Log warnings if any
+        if (validation.warnings.length > 0) {
+          console.warn('Circuit file warnings:', validation.warnings);
+        }
+
+        onLoad(data as SavedCircuit);
       } catch (err) {
-        alert('Failed to load circuit file');
+        alert('Failed to load circuit file: ' + (err instanceof Error ? err.message : 'Unknown error'));
       }
     };
     input.click();

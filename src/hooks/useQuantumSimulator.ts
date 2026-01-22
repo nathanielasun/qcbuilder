@@ -1,10 +1,9 @@
 /**
- * React hook for quantum circuit simulation using TensorFlow.js.
+ * React hook for quantum circuit simulation using pure JavaScript.
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
-import * as tf from '@tensorflow/tfjs';
-import { ExecutionResults, CircuitState } from '../types/circuit';
+import { useState, useCallback, useEffect } from 'react';
+import { ExecutionResults, CircuitState, GateInstance, RepeaterBlock } from '../types/circuit';
 
 // Complex number utilities
 interface Complex {
@@ -146,17 +145,77 @@ function getGateMatrix(gateId: string, angle?: number, angles?: number[]): Compl
   }
 }
 
+/**
+ * Expand gates within repeater blocks.
+ * Gates inside repeaters are duplicated according to the repetition count,
+ * with their column positions adjusted to create sequential copies.
+ */
+function expandRepeaters(
+  gates: GateInstance[],
+  repeaters: RepeaterBlock[]
+): GateInstance[] {
+  if (repeaters.length === 0) return gates;
+
+  const expanded: GateInstance[] = [];
+  const gatesInRepeaters = new Set<string>();
+
+  // Sort repeaters by column for proper expansion
+  const sortedRepeaters = [...repeaters].sort(
+    (a, b) => a.columnStart - b.columnStart
+  );
+
+  // Process each repeater
+  for (const repeater of sortedRepeaters) {
+    // Find gates contained within this repeater's bounds
+    const containedGates = gates.filter(g => {
+      // Check if gate's target qubit is within repeater's qubit range
+      const targetInRange = g.target >= repeater.qubitStart && g.target <= repeater.qubitEnd;
+
+      // Check if gate's column is within repeater's column range
+      const columnInRange = g.column >= repeater.columnStart && g.column <= repeater.columnEnd;
+
+      // For two-qubit gates, also check control qubit
+      let controlInRange = true;
+      if (g.control !== undefined) {
+        controlInRange = g.control >= repeater.qubitStart && g.control <= repeater.qubitEnd;
+      }
+
+      return targetInRange && columnInRange && controlInRange;
+    });
+
+    // Calculate the width of the repeater block (for column offset)
+    const blockWidth = repeater.columnEnd - repeater.columnStart + 1;
+
+    // Add repeated copies of contained gates
+    for (let rep = 0; rep < repeater.repetitions; rep++) {
+      for (const gate of containedGates) {
+        gatesInRepeaters.add(gate.id);
+
+        // Calculate new column: original position relative to block start, plus offset for this repetition
+        const relativeColumn = gate.column - repeater.columnStart;
+        const newColumn = repeater.columnStart + relativeColumn + (rep * blockWidth);
+
+        expanded.push({
+          ...gate,
+          id: `${gate.id}_rep${rep}`,
+          column: newColumn,
+        });
+      }
+    }
+  }
+
+  // Add gates that are NOT in any repeater (unchanged)
+  for (const gate of gates) {
+    if (!gatesInRepeaters.has(gate.id)) {
+      expanded.push(gate);
+    }
+  }
+
+  return expanded;
+}
+
 // Hardware information interface
 export interface HardwareInfo {
-  backend: string;
-  availableBackends: string[];
-  memoryInfo: {
-    numTensors: number;
-    numDataBuffers: number;
-    numBytes: number;
-    numBytesInGPU?: number;
-    unreliable?: boolean;
-  } | null;
   deviceMemory: number | null; // Device memory in GB (if available)
   hardwareConcurrency: number; // Number of logical CPU cores
   platform: string;
@@ -170,10 +229,7 @@ export interface UseQuantumSimulatorReturn {
   isExecuting: boolean;
   results: ExecutionResults | null;
   error: string | null;
-  backend: string;
-  availableBackends: string[];
   hardwareInfo: HardwareInfo | null;
-  setBackend: (backendName: string) => Promise<boolean>;
   refreshHardwareInfo: () => void;
   executeCircuit: (circuit: CircuitState, shots?: number) => Promise<ExecutionResults | null>;
   getStatevector: (circuit: CircuitState) => Promise<{ real: number[]; imag: number[] } | null>;
@@ -203,29 +259,14 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
   const [isExecuting, setIsExecuting] = useState(false);
   const [results, setResults] = useState<ExecutionResults | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [backend, setBackendState] = useState<string>('cpu');
-  const [availableBackends, setAvailableBackends] = useState<string[]>([]);
   const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
-  const initRef = useRef(false);
 
   // Refresh hardware information
   const refreshHardwareInfo = useCallback(() => {
-    const memoryInfo = tf.memory();
-    const currentBackend = tf.getBackend() || 'cpu';
-
     // Get device memory if available (Chrome only)
     const deviceMemory = (navigator as { deviceMemory?: number }).deviceMemory || null;
 
     const info: HardwareInfo = {
-      backend: currentBackend,
-      availableBackends: availableBackends,
-      memoryInfo: {
-        numTensors: memoryInfo.numTensors,
-        numDataBuffers: memoryInfo.numDataBuffers,
-        numBytes: memoryInfo.numBytes,
-        numBytesInGPU: (memoryInfo as { numBytesInGPU?: number }).numBytesInGPU,
-        unreliable: memoryInfo.unreliable,
-      },
       deviceMemory,
       hardwareConcurrency: navigator.hardwareConcurrency || 1,
       platform: navigator.platform,
@@ -235,70 +276,13 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
     };
 
     setHardwareInfo(info);
-  }, [availableBackends]);
-
-  // Set backend
-  const setBackend = useCallback(async (backendName: string): Promise<boolean> => {
-    try {
-      setError(null);
-      await tf.setBackend(backendName);
-      await tf.ready();
-      const newBackend = tf.getBackend() || 'cpu';
-      setBackendState(newBackend);
-      refreshHardwareInfo();
-      return true;
-    } catch (err) {
-      setError(`Failed to set backend to ${backendName}: ${err}`);
-      return false;
-    }
-  }, [refreshHardwareInfo]);
-
-  // Initialize TensorFlow.js
-  useEffect(() => {
-    if (initRef.current) return;
-    initRef.current = true;
-
-    const initTf = async () => {
-      try {
-        await tf.ready();
-        const currentBackend = tf.getBackend();
-        setBackendState(currentBackend || 'cpu');
-
-        // Get available backends
-        const backends: string[] = [];
-
-        // Always available
-        backends.push('cpu');
-
-        // Check WebGL
-        if (checkWebGLSupport()) {
-          backends.push('webgl');
-        }
-
-        // Check WebGPU (experimental)
-        if (checkWebGPUSupport()) {
-          backends.push('webgpu');
-        }
-
-        // WASM is typically available
-        backends.push('wasm');
-
-        setAvailableBackends(backends);
-        setIsReady(true);
-      } catch (err) {
-        setError(`Failed to initialize TensorFlow.js: ${err}`);
-      }
-    };
-
-    initTf();
   }, []);
 
-  // Update hardware info when ready or backend changes
+  // Initialize simulator (no async needed without TF.js)
   useEffect(() => {
-    if (isReady) {
-      refreshHardwareInfo();
-    }
-  }, [isReady, backend, refreshHardwareInfo]);
+    setIsReady(true);
+    refreshHardwareInfo();
+  }, [refreshHardwareInfo]);
 
   // Apply single-qubit gate using strided indexing
   const applySingleQubitGate = useCallback((
@@ -437,7 +421,7 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
   const simulateOnce = useCallback((
     circuit: CircuitState
   ): string => {
-    const { numQubits, gates } = circuit;
+    const { numQubits, gates, repeaters = [] } = circuit;
     const dim = 1 << numQubits;
 
     // Initialize |0...0⟩ state
@@ -445,8 +429,9 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
     const stateImag = new Float32Array(dim);
     stateReal[0] = 1;
 
-    // Sort gates by column
-    const sortedGates = [...gates].sort((a, b) => a.column - b.column);
+    // Expand repeaters and sort gates by column
+    const expandedGates = expandRepeaters(gates, repeaters);
+    const sortedGates = [...expandedGates].sort((a, b) => a.column - b.column);
 
     // Measurement results
     const measurements: number[] = new Array(numQubits).fill(0);
@@ -485,7 +470,7 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
     return measurements.map(b => b.toString()).join('');
   }, [applySingleQubitGate, applyControlledGate, applySwapGate, measureQubit]);
 
-  // Execute circuit with multiple shots
+  // Execute circuit with multiple shots using chunked execution to prevent UI blocking
   const executeCircuit = useCallback(async (
     circuit: CircuitState,
     shots: number = 1024
@@ -500,12 +485,24 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
 
     try {
       const startTime = performance.now();
-
-      // Run shots
       const counts: Record<string, number> = {};
-      for (let i = 0; i < shots; i++) {
-        const result = simulateOnce(circuit);
-        counts[result] = (counts[result] || 0) + 1;
+
+      // Chunked execution to prevent UI blocking
+      const CHUNK_SIZE = 100;
+
+      for (let i = 0; i < shots; i += CHUNK_SIZE) {
+        const chunkEnd = Math.min(i + CHUNK_SIZE, shots);
+
+        // Process chunk
+        for (let j = i; j < chunkEnd; j++) {
+          const result = simulateOnce(circuit);
+          counts[result] = (counts[result] || 0) + 1;
+        }
+
+        // Yield to main thread between chunks to keep UI responsive
+        if (chunkEnd < shots) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
       }
 
       // Calculate probabilities
@@ -546,7 +543,7 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
     }
 
     try {
-      const { numQubits, gates } = circuit;
+      const { numQubits, gates, repeaters = [] } = circuit;
       const dim = 1 << numQubits;
 
       // Initialize |0...0⟩ state
@@ -554,8 +551,9 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
       const stateImag = new Float32Array(dim);
       stateReal[0] = 1;
 
-      // Sort gates by column and filter out measurements
-      const sortedGates = [...gates]
+      // Expand repeaters, filter out measurements, and sort by column
+      const expandedGates = expandRepeaters(gates, repeaters);
+      const sortedGates = [...expandedGates]
         .filter(g => g.gateId !== 'M')
         .sort((a, b) => a.column - b.column);
 
@@ -599,10 +597,7 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
     isExecuting,
     results,
     error,
-    backend,
-    availableBackends,
     hardwareInfo,
-    setBackend,
     refreshHardwareInfo,
     executeCircuit,
     getStatevector,

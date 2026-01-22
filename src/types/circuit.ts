@@ -92,8 +92,8 @@ export interface SavedCircuit {
     label?: string;
     color: string;
   }>;
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // Drag and drop types

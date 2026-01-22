@@ -913,6 +913,77 @@
   font-family: 'JetBrains Mono', monospace;
 }
 
+/* Multi-selection Panel */
+.multi-selection-panel {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  z-index: 50;
+  border: 1px solid #E0E0E0;
+}
+
+.multi-selection-count {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2C3E50;
+  white-space: nowrap;
+}
+
+.multi-selection-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.multi-selection-panel .action-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.multi-selection-panel .copy-btn {
+  background: #EBF5FF;
+  color: #4A90D9;
+}
+
+.multi-selection-panel .copy-btn:hover {
+  background: #D4E9FF;
+}
+
+.multi-selection-panel .delete-btn {
+  background: #FDEDED;
+  color: #E74C3C;
+}
+
+.multi-selection-panel .delete-btn:hover {
+  background: #FAD7D7;
+}
+
+/* Selection Box */
+.selection-box {
+  pointer-events: none;
+  animation: selection-pulse 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes selection-pulse {
+  from {
+    background-color: rgba(74, 144, 217, 0.1);
+  }
+  to {
+    background-color: rgba(74, 144, 217, 0.2);
+  }
+}
+
 /* Confirm Dialog */
 .confirm-dialog {
   background: white;

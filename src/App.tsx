@@ -2,7 +2,7 @@
  * Main application component for Quantum Circuit Builder.
  */
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Settings } from 'lucide-react';
 import {
   GatePalette,
@@ -23,17 +23,26 @@ import { GateInstance, SavedCircuit, RepeaterBlock } from './types/circuit';
 import { GATE_DEFINITIONS } from './utils/gateDefinitions';
 import './styles/App.css';
 
+// Interface for clipboard data
+interface ClipboardData {
+  gates: GateInstance[];
+  minColumn: number;
+  minQubit: number;
+}
+
 export const App: React.FC = () => {
   const {
     circuit,
     numColumns,
     addGate,
     removeGate,
+    removeGates,
     moveGate,
     updateGateTarget,
     updateGateControl,
     updateGateAngle,
     updateGateAngles,
+    duplicateGates,
     addRepeater,
     removeRepeater,
     updateRepeater,
@@ -53,17 +62,14 @@ export const App: React.FC = () => {
     isExecuting,
     results,
     error,
-    backend,
-    availableBackends,
     hardwareInfo,
-    setBackend,
     refreshHardwareInfo,
     executeCircuit,
     getStatevector,
   } = useQuantumSimulator();
 
   const [selectedGate, setSelectedGate] = useState<string | null>(null);
-  const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
+  const [selectedInstances, setSelectedInstances] = useState<Set<string>>(new Set());
   const [selectedRepeater, setSelectedRepeater] = useState<string | null>(null);
   const [editingGate, setEditingGate] = useState<GateInstance | null>(null);
   const [editingRepeater, setEditingRepeater] = useState<RepeaterBlock | null>(null);
@@ -73,27 +79,54 @@ export const App: React.FC = () => {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [pendingPreset, setPendingPreset] = useState<SavedCircuit | null>(null);
   const [showHardwareSettings, setShowHardwareSettings] = useState(false);
-  const [isChangingBackend, setIsChangingBackend] = useState(false);
+  const clipboardRef = useRef<ClipboardData | null>(null);
 
-  // Get the selected gate instance
+  // Get the selected gate instance (only when single selection)
   const selectedGateInstance = useMemo(() => {
-    if (!selectedInstance) return null;
-    return circuit.gates.find(g => g.id === selectedInstance) || null;
-  }, [selectedInstance, circuit.gates]);
+    if (selectedInstances.size !== 1) return null;
+    const [instanceId] = selectedInstances;
+    return circuit.gates.find(g => g.id === instanceId) || null;
+  }, [selectedInstances, circuit.gates]);
+
+  // Get first selected instance ID for single-item operations
+  const selectedInstance = useMemo(() => {
+    if (selectedInstances.size === 0) return null;
+    return [...selectedInstances][0];
+  }, [selectedInstances]);
 
   // Handle gate selection from palette
   const handleGateSelect = useCallback((gateId: string) => {
     setSelectedGate(prev => prev === gateId ? null : gateId);
-    setSelectedInstance(null);
+    setSelectedInstances(new Set());
   }, []);
 
-  // Handle gate instance selection
-  const handleInstanceSelect = useCallback((instanceId: string | null) => {
-    setSelectedInstance(instanceId);
+  // Handle gate instance selection (supports multi-selection with Shift/Ctrl)
+  const handleInstanceSelect = useCallback((instanceId: string | null, addToSelection?: boolean) => {
+    if (instanceId === null) {
+      setSelectedInstances(new Set());
+    } else if (addToSelection) {
+      setSelectedInstances(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(instanceId)) {
+          newSet.delete(instanceId);
+        } else {
+          newSet.add(instanceId);
+        }
+        return newSet;
+      });
+    } else {
+      setSelectedInstances(new Set([instanceId]));
+    }
     setSelectedGate(null);
   }, []);
 
-  // Handle gate add
+  // Handle multi-selection (for box select)
+  const handleMultiSelect = useCallback((instanceIds: string[]) => {
+    setSelectedInstances(new Set(instanceIds));
+    setSelectedGate(null);
+  }, []);
+
+  // Handle gate add with validation
   const handleGateAdd = useCallback((
     gateId: string,
     target: number,
@@ -103,7 +136,11 @@ export const App: React.FC = () => {
     const def = GATE_DEFINITIONS[gateId];
     const angle = def?.hasAngle ? Math.PI : undefined;
     const angles = def?.hasMultipleAngles ? [Math.PI, 0, 0] : undefined;
-    addGate(gateId, target, column, control, angle, angles);
+    const validationError = addGate(gateId, target, column, control, angle, angles);
+    if (validationError) {
+      console.warn('Gate placement error:', validationError.message);
+      // Optionally show error to user - for now just log
+    }
   }, [addGate]);
 
   // Handle gate edit (for rotation gates - opens angle editor modal)
@@ -128,17 +165,23 @@ export const App: React.FC = () => {
     }
   }, [editingGate, updateGateAngle, updateGateAngles]);
 
-  // Handle target update from settings panel
+  // Handle target update from settings panel with validation
   const handleUpdateTarget = useCallback((target: number) => {
     if (selectedInstance) {
-      updateGateTarget(selectedInstance, target);
+      const error = updateGateTarget(selectedInstance, target);
+      if (error) {
+        console.warn('Target update error:', error.message);
+      }
     }
   }, [selectedInstance, updateGateTarget]);
 
-  // Handle control update from settings panel
+  // Handle control update from settings panel with validation
   const handleUpdateControl = useCallback((control: number) => {
     if (selectedInstance) {
-      updateGateControl(selectedInstance, control);
+      const error = updateGateControl(selectedInstance, control);
+      if (error) {
+        console.warn('Control update error:', error.message);
+      }
     }
   }, [selectedInstance, updateGateControl]);
 
@@ -156,13 +199,13 @@ export const App: React.FC = () => {
     }
   }, [selectedInstance, updateGateAngles]);
 
-  // Handle remove from settings panel
+  // Handle remove from settings panel (removes all selected)
   const handleRemoveSelected = useCallback(() => {
-    if (selectedInstance) {
-      removeGate(selectedInstance);
-      setSelectedInstance(null);
+    if (selectedInstances.size > 0) {
+      removeGates([...selectedInstances]);
+      setSelectedInstances(new Set());
     }
-  }, [selectedInstance, removeGate]);
+  }, [selectedInstances, removeGates]);
 
   // Handle execute
   const handleExecute = useCallback(async () => {
@@ -185,7 +228,7 @@ export const App: React.FC = () => {
   const handleClearConfirm = useCallback(() => {
     clearCircuit();
     setStatevector(null);
-    setSelectedInstance(null);
+    setSelectedInstances(new Set());
     setShowClearConfirm(false);
   }, [clearCircuit]);
 
@@ -203,7 +246,7 @@ export const App: React.FC = () => {
       // Load directly if circuit is empty
       loadCircuit(preset);
       setStatevector(null);
-      setSelectedInstance(null);
+      setSelectedInstances(new Set());
     }
   }, [circuit.gates.length, loadCircuit]);
 
@@ -212,7 +255,7 @@ export const App: React.FC = () => {
     if (pendingPreset) {
       loadCircuit(pendingPreset);
       setStatevector(null);
-      setSelectedInstance(null);
+      setSelectedInstances(new Set());
       setPendingPreset(null);
     }
   }, [pendingPreset, loadCircuit]);
@@ -225,7 +268,7 @@ export const App: React.FC = () => {
   // Handle repeater selection
   const handleRepeaterSelect = useCallback((repeaterId: string | null) => {
     setSelectedRepeater(repeaterId);
-    setSelectedInstance(null);
+    setSelectedInstances(new Set());
     setSelectedGate(null);
   }, []);
 
@@ -278,13 +321,54 @@ export const App: React.FC = () => {
     return circuit.repeaters.find(r => r.id === selectedRepeater) || null;
   }, [selectedRepeater, circuit.repeaters]);
 
-  // Handle backend change
-  const handleBackendChange = useCallback(async (backendName: string): Promise<boolean> => {
-    setIsChangingBackend(true);
-    const success = await setBackend(backendName);
-    setIsChangingBackend(false);
-    return success;
-  }, [setBackend]);
+  // Copy selected gates to clipboard
+  const handleCopy = useCallback(() => {
+    if (selectedInstances.size === 0) return;
+
+    const gatesToCopy = circuit.gates.filter(g => selectedInstances.has(g.id));
+    if (gatesToCopy.length === 0) return;
+
+    // Calculate the minimum column and qubit to use as reference point
+    const minColumn = Math.min(...gatesToCopy.map(g => g.column));
+    const minQubit = Math.min(...gatesToCopy.map(g => {
+      const controlQubit = g.control !== undefined ? g.control : g.target;
+      return Math.min(g.target, controlQubit);
+    }));
+
+    clipboardRef.current = {
+      gates: gatesToCopy,
+      minColumn,
+      minQubit,
+    };
+  }, [selectedInstances, circuit.gates]);
+
+  // Paste gates from clipboard
+  const handlePaste = useCallback(() => {
+    if (!clipboardRef.current || clipboardRef.current.gates.length === 0) return;
+
+    const { gates, minColumn } = clipboardRef.current;
+
+    // Find the rightmost column in the current circuit to paste after
+    const maxColumn = circuit.gates.length > 0
+      ? Math.max(...circuit.gates.map(g => g.column))
+      : -1;
+
+    const columnOffset = maxColumn + 1 - minColumn;
+    const qubitOffset = 0; // Paste at same qubit positions (minQubit preserved in clipboard for future use)
+
+    const gateIds = gates.map(g => g.id);
+    const { newIds, skipped } = duplicateGates(gateIds, columnOffset, qubitOffset);
+
+    // Log if any gates were skipped due to collisions
+    if (skipped > 0) {
+      console.warn(`${skipped} gate(s) skipped due to collisions or out of bounds`);
+    }
+
+    // Select the newly pasted gates
+    if (newIds.length > 0) {
+      setSelectedInstances(new Set(newIds));
+    }
+  }, [circuit.gates, duplicateGates]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -300,12 +384,12 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Delete/Backspace - remove selected gate or repeater
+      // Delete/Backspace - remove selected gates or repeater
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedInstance) {
+        if (selectedInstances.size > 0) {
           e.preventDefault();
-          removeGate(selectedInstance);
-          setSelectedInstance(null);
+          removeGates([...selectedInstances]);
+          setSelectedInstances(new Set());
         } else if (selectedRepeater) {
           e.preventDefault();
           removeRepeater(selectedRepeater);
@@ -315,7 +399,29 @@ export const App: React.FC = () => {
 
       // Escape - deselect
       if (e.key === 'Escape') {
-        setSelectedInstance(null);
+        setSelectedInstances(new Set());
+        setSelectedGate(null);
+        setSelectedRepeater(null);
+      }
+
+      // Ctrl/Cmd + C - Copy
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        if (selectedInstances.size > 0) {
+          e.preventDefault();
+          handleCopy();
+        }
+      }
+
+      // Ctrl/Cmd + V - Paste
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        e.preventDefault();
+        handlePaste();
+      }
+
+      // Ctrl/Cmd + A - Select all gates
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault();
+        setSelectedInstances(new Set(circuit.gates.map(g => g.id)));
         setSelectedGate(null);
         setSelectedRepeater(null);
       }
@@ -351,7 +457,7 @@ export const App: React.FC = () => {
       }
 
       // Enter/Space - Run circuit (when no gate is selected for placement)
-      if ((e.key === 'Enter' || e.key === ' ') && !selectedGate && !selectedInstance) {
+      if ((e.key === 'Enter' || e.key === ' ') && !selectedGate && selectedInstances.size === 0) {
         e.preventDefault();
         if (isReady && !isExecuting) {
           handleExecute();
@@ -365,7 +471,7 @@ export const App: React.FC = () => {
         if (gateIndex < quickGates.length) {
           const gateId = quickGates[gateIndex];
           setSelectedGate(prev => prev === gateId ? null : gateId);
-          setSelectedInstance(null);
+          setSelectedInstances(new Set());
         }
       }
     };
@@ -373,15 +479,18 @@ export const App: React.FC = () => {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [
-    selectedInstance,
+    selectedInstances,
     selectedGate,
     selectedRepeater,
     editingGate,
     editingRepeater,
     isCreatingRepeater,
     showClearConfirm,
-    removeGate,
+    removeGates,
     removeRepeater,
+    handleCopy,
+    handlePaste,
+    circuit.gates,
     canUndo,
     canRedo,
     undo,
@@ -398,7 +507,7 @@ export const App: React.FC = () => {
         <h1>Quantum Circuit Builder</h1>
         <div className="header-info">
           <span className={`backend-badge ${isReady ? 'ready' : 'loading'}`}>
-            {isReady ? `Backend: ${backend.toUpperCase()}` : 'Initializing...'}
+            {isReady ? 'JS Engine Ready' : 'Initializing...'}
           </span>
           <button
             className="header-settings-button"
@@ -420,7 +529,10 @@ export const App: React.FC = () => {
           <div className="keyboard-hints">
             <h4>Keyboard Shortcuts</h4>
             <div className="hint"><kbd>1-9</kbd> Quick select gates</div>
-            <div className="hint"><kbd>Del</kbd> Delete selected gate</div>
+            <div className="hint"><kbd>Del</kbd> Delete selected</div>
+            <div className="hint"><kbd>Ctrl+C</kbd> Copy selected</div>
+            <div className="hint"><kbd>Ctrl+V</kbd> Paste</div>
+            <div className="hint"><kbd>Ctrl+A</kbd> Select all</div>
             <div className="hint"><kbd>Ctrl+Z</kbd> Undo</div>
             <div className="hint"><kbd>Ctrl+Y</kbd> Redo</div>
             <div className="hint"><kbd>Ctrl+S</kbd> Save circuit</div>
@@ -454,18 +566,19 @@ export const App: React.FC = () => {
               circuit={circuit}
               numColumns={numColumns}
               selectedGate={selectedGate}
-              selectedInstance={selectedInstance}
+              selectedInstances={selectedInstances}
               selectedRepeater={selectedRepeater}
               onGateAdd={handleGateAdd}
               onGateMove={moveGate}
               onGateSelect={handleInstanceSelect}
+              onMultiSelect={handleMultiSelect}
               onGateRemove={removeGate}
               onGateEdit={handleGateEdit}
               onRepeaterSelect={handleRepeaterSelect}
               onRepeaterEdit={handleRepeaterEdit}
             />
 
-            {/* Gate Settings Panel - shows when a gate is selected */}
+            {/* Gate Settings Panel - shows when a single gate is selected */}
             {selectedGateInstance && (
               <GateSettingsPanel
                 gate={selectedGateInstance}
@@ -475,8 +588,25 @@ export const App: React.FC = () => {
                 onUpdateAngle={handleUpdateAngle}
                 onUpdateAngles={handleUpdateAngles}
                 onRemove={handleRemoveSelected}
-                onClose={() => setSelectedInstance(null)}
+                onClose={() => setSelectedInstances(new Set())}
               />
+            )}
+
+            {/* Multi-selection indicator */}
+            {selectedInstances.size > 1 && (
+              <div className="multi-selection-panel">
+                <div className="multi-selection-count">
+                  {selectedInstances.size} gates selected
+                </div>
+                <div className="multi-selection-actions">
+                  <button onClick={handleCopy} className="action-btn copy-btn">
+                    Copy (Ctrl+C)
+                  </button>
+                  <button onClick={handleRemoveSelected} className="action-btn delete-btn">
+                    Delete (Del)
+                  </button>
+                </div>
+              </div>
             )}
 
             {/* Repeater Settings Panel - shows when a repeater is selected */}
@@ -562,11 +692,7 @@ export const App: React.FC = () => {
       <HardwareSettingsPanel
         isOpen={showHardwareSettings}
         hardwareInfo={hardwareInfo}
-        currentBackend={backend}
-        availableBackends={availableBackends}
-        isChangingBackend={isChangingBackend}
         onClose={() => setShowHardwareSettings(false)}
-        onBackendChange={handleBackendChange}
         onRefresh={refreshHardwareInfo}
       />
     </div>

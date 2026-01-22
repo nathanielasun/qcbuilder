@@ -6,10 +6,8 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { GateInstance, CircuitState, SavedCircuit, RepeaterBlock } from '../types/circuit';
 import { validateSavedCircuit } from '../utils/circuitValidator';
+import { CIRCUIT_LIMITS, STORAGE_KEYS } from '../config';
 
-const MAX_QUBITS = 10;
-const MAX_COLUMNS = 50;
-const STORAGE_KEY = 'quantum-circuit-builder-state';
 const AUTO_SAVE_DELAY = 500; // ms
 
 function generateId(): string {
@@ -19,7 +17,7 @@ function generateId(): string {
 // Load saved state from localStorage
 function loadSavedState(): CircuitState | null {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(STORAGE_KEYS.AUTOSAVE);
     if (saved) {
       const parsed = JSON.parse(saved);
       const validation = validateSavedCircuit(parsed);
@@ -144,7 +142,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
             color: r.color,
           })),
         };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+        localStorage.setItem(STORAGE_KEYS.AUTOSAVE, JSON.stringify(toSave));
       } catch (e) {
         console.error('Failed to auto-save circuit:', e);
       }
@@ -157,7 +155,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
   const numColumns = useMemo(() => {
     if (circuit.gates.length === 0) return 5;
     const maxColumn = Math.max(...circuit.gates.map(g => g.column));
-    return Math.min(Math.max(maxColumn + 3, 5), MAX_COLUMNS);
+    return Math.min(Math.max(maxColumn + 3, 5), CIRCUIT_LIMITS.MAX_COLUMNS);
   }, [circuit.gates]);
 
   // Check if a cell is occupied by any gate
@@ -174,7 +172,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
 
   // Save current state to history
   const saveToHistory = useCallback(() => {
-    setHistory(h => [...h.slice(-49), circuit]);
+    setHistory(h => [...h.slice(-(CIRCUIT_LIMITS.MAX_HISTORY - 1)), circuit]);
     setFuture([]);
   }, [circuit]);
 
@@ -203,8 +201,8 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     }
 
     // Validate column bounds
-    if (column < 0 || column >= MAX_COLUMNS) {
-      return { type: 'error', message: `Column ${column} is out of bounds (0-${MAX_COLUMNS - 1})` };
+    if (column < 0 || column >= CIRCUIT_LIMITS.MAX_COLUMNS) {
+      return { type: 'error', message: `Column ${column} is out of bounds (0-${CIRCUIT_LIMITS.MAX_COLUMNS - 1})` };
     }
 
     // Check for collision at target position
@@ -417,7 +415,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
           skipped++;
           continue;
         }
-        if (newColumn < 0 || newColumn >= MAX_COLUMNS) {
+        if (newColumn < 0 || newColumn >= CIRCUIT_LIMITS.MAX_COLUMNS) {
           skipped++;
           continue;
         }
@@ -516,7 +514,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
 
   // Set number of qubits
   const setNumQubits = useCallback((n: number) => {
-    if (n < 1 || n > MAX_QUBITS) return;
+    if (n < 1 || n > CIRCUIT_LIMITS.MAX_QUBITS) return;
     saveToHistory();
     setCircuit(c => ({
       ...c,
@@ -544,7 +542,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
 
   // New circuit (clears everything including localStorage)
   const newCircuit = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEYS.AUTOSAVE);
     setCircuit({
       numQubits: 3,
       gates: [],

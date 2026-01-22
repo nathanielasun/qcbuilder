@@ -14,3 +14,4 @@ export { PresetCircuits } from './PresetCircuits';
 export { RepeaterEditor } from './RepeaterEditor';
 export { RepeaterSettingsPanel } from './RepeaterSettingsPanel';
 export { HardwareSettingsPanel } from './HardwareSettingsPanel';
+export { ErrorBoundary } from './ErrorBoundary';

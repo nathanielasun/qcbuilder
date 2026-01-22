@@ -4,6 +4,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { ExecutionResults, CircuitState, GateInstance, RepeaterBlock, Complex } from '../types/circuit';
+import { CIRCUIT_LIMITS, EXECUTION_CONSTANTS } from '../config';
 
 // Complex number utilities
 
@@ -469,7 +470,7 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
   // Execute circuit with multiple shots using chunked execution to prevent UI blocking
   const executeCircuit = useCallback(async (
     circuit: CircuitState,
-    shots: number = 1024
+    shots: number = CIRCUIT_LIMITS.DEFAULT_SHOTS
   ): Promise<ExecutionResults | null> => {
     if (!isReady) {
       setError('Simulator not ready');
@@ -484,10 +485,8 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
       const counts: Record<string, number> = {};
 
       // Chunked execution to prevent UI blocking
-      const CHUNK_SIZE = 100;
-
-      for (let i = 0; i < shots; i += CHUNK_SIZE) {
-        const chunkEnd = Math.min(i + CHUNK_SIZE, shots);
+      for (let i = 0; i < shots; i += EXECUTION_CONSTANTS.CHUNK_SIZE) {
+        const chunkEnd = Math.min(i + EXECUTION_CONSTANTS.CHUNK_SIZE, shots);
 
         // Process chunk
         for (let j = i; j < chunkEnd; j++) {

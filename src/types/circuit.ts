@@ -63,13 +63,13 @@ export interface ExecutionResults {
   executionTime: number;
 }
 
-// Complex number
+// Complex number for quantum state calculations
 export interface Complex {
   re: number;
   im: number;
 }
 
-// Saved circuit format
+// Saved circuit format (for import/export)
 export interface SavedCircuit {
   version: string;
   name: string;
@@ -94,42 +94,4 @@ export interface SavedCircuit {
   }>;
   createdAt?: string;
   updatedAt?: string;
-}
-
-// Drag and drop types
-export interface DragItem {
-  type: 'gate' | 'placed-gate';
-  gateId: string;
-  instanceId?: string;
-}
-
-export interface DropResult {
-  qubit: number;
-  column: number;
-}
-
-// UI state
-export interface UIState {
-  selectedGate: string | null;
-  hoveredQubit: number | null;
-  hoveredColumn: number | null;
-  isExecuting: boolean;
-  showStatevector: boolean;
-}
-
-// Toast notification
-export interface Toast {
-  id: string;
-  type: 'success' | 'error' | 'info' | 'warning';
-  message: string;
-  duration?: number;
-}
-
-// Application settings
-export interface AppSettings {
-  defaultShots: number;
-  autoExecute: boolean;
-  showProbabilities: boolean;
-  theme: 'light' | 'dark';
-  maxQubits: number;
 }

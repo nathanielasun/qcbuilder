@@ -3,13 +3,9 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { ExecutionResults, CircuitState, GateInstance, RepeaterBlock } from '../types/circuit';
+import { ExecutionResults, CircuitState, GateInstance, RepeaterBlock, Complex } from '../types/circuit';
 
 // Complex number utilities
-interface Complex {
-  re: number;
-  im: number;
-}
 
 function complexMul(a: Complex, b: Complex): Complex {
   return {

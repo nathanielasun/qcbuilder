@@ -4,7 +4,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import * as tf from '@tensorflow/tfjs';
-import { GateInstance, ExecutionResults, CircuitState } from '../types/circuit';
+import { ExecutionResults, CircuitState } from '../types/circuit';
 
 // Complex number utilities
 interface Complex {
@@ -21,10 +21,6 @@ function complexMul(a: Complex, b: Complex): Complex {
 
 function complexAdd(a: Complex, b: Complex): Complex {
   return { re: a.re + b.re, im: a.im + b.im };
-}
-
-function complexScale(a: Complex, s: number): Complex {
-  return { re: a.re * s, im: a.im * s };
 }
 
 function complexMagnitudeSq(a: Complex): number {
@@ -150,15 +146,56 @@ function getGateMatrix(gateId: string, angle?: number, angles?: number[]): Compl
   }
 }
 
+// Hardware information interface
+export interface HardwareInfo {
+  backend: string;
+  availableBackends: string[];
+  memoryInfo: {
+    numTensors: number;
+    numDataBuffers: number;
+    numBytes: number;
+    numBytesInGPU?: number;
+    unreliable?: boolean;
+  } | null;
+  deviceMemory: number | null; // Device memory in GB (if available)
+  hardwareConcurrency: number; // Number of logical CPU cores
+  platform: string;
+  userAgent: string;
+  webGLSupported: boolean;
+  webGPUSupported: boolean;
+}
+
 export interface UseQuantumSimulatorReturn {
   isReady: boolean;
   isExecuting: boolean;
   results: ExecutionResults | null;
   error: string | null;
   backend: string;
+  availableBackends: string[];
+  hardwareInfo: HardwareInfo | null;
+  setBackend: (backendName: string) => Promise<boolean>;
+  refreshHardwareInfo: () => void;
   executeCircuit: (circuit: CircuitState, shots?: number) => Promise<ExecutionResults | null>;
   getStatevector: (circuit: CircuitState) => Promise<{ real: number[]; imag: number[] } | null>;
   reset: () => void;
+}
+
+// Check WebGL support
+function checkWebGLSupport(): boolean {
+  try {
+    const canvas = document.createElement('canvas');
+    return !!(
+      window.WebGLRenderingContext &&
+      (canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Check WebGPU support
+function checkWebGPUSupport(): boolean {
+  return 'gpu' in navigator;
 }
 
 export function useQuantumSimulator(): UseQuantumSimulatorReturn {
@@ -166,8 +203,55 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
   const [isExecuting, setIsExecuting] = useState(false);
   const [results, setResults] = useState<ExecutionResults | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [backend, setBackend] = useState<string>('cpu');
+  const [backend, setBackendState] = useState<string>('cpu');
+  const [availableBackends, setAvailableBackends] = useState<string[]>([]);
+  const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
   const initRef = useRef(false);
+
+  // Refresh hardware information
+  const refreshHardwareInfo = useCallback(() => {
+    const memoryInfo = tf.memory();
+    const currentBackend = tf.getBackend() || 'cpu';
+
+    // Get device memory if available (Chrome only)
+    const deviceMemory = (navigator as { deviceMemory?: number }).deviceMemory || null;
+
+    const info: HardwareInfo = {
+      backend: currentBackend,
+      availableBackends: availableBackends,
+      memoryInfo: {
+        numTensors: memoryInfo.numTensors,
+        numDataBuffers: memoryInfo.numDataBuffers,
+        numBytes: memoryInfo.numBytes,
+        numBytesInGPU: (memoryInfo as { numBytesInGPU?: number }).numBytesInGPU,
+        unreliable: memoryInfo.unreliable,
+      },
+      deviceMemory,
+      hardwareConcurrency: navigator.hardwareConcurrency || 1,
+      platform: navigator.platform,
+      userAgent: navigator.userAgent,
+      webGLSupported: checkWebGLSupport(),
+      webGPUSupported: checkWebGPUSupport(),
+    };
+
+    setHardwareInfo(info);
+  }, [availableBackends]);
+
+  // Set backend
+  const setBackend = useCallback(async (backendName: string): Promise<boolean> => {
+    try {
+      setError(null);
+      await tf.setBackend(backendName);
+      await tf.ready();
+      const newBackend = tf.getBackend() || 'cpu';
+      setBackendState(newBackend);
+      refreshHardwareInfo();
+      return true;
+    } catch (err) {
+      setError(`Failed to set backend to ${backendName}: ${err}`);
+      return false;
+    }
+  }, [refreshHardwareInfo]);
 
   // Initialize TensorFlow.js
   useEffect(() => {
@@ -178,7 +262,28 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
       try {
         await tf.ready();
         const currentBackend = tf.getBackend();
-        setBackend(currentBackend || 'cpu');
+        setBackendState(currentBackend || 'cpu');
+
+        // Get available backends
+        const backends: string[] = [];
+
+        // Always available
+        backends.push('cpu');
+
+        // Check WebGL
+        if (checkWebGLSupport()) {
+          backends.push('webgl');
+        }
+
+        // Check WebGPU (experimental)
+        if (checkWebGPUSupport()) {
+          backends.push('webgpu');
+        }
+
+        // WASM is typically available
+        backends.push('wasm');
+
+        setAvailableBackends(backends);
         setIsReady(true);
       } catch (err) {
         setError(`Failed to initialize TensorFlow.js: ${err}`);
@@ -187,6 +292,13 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
 
     initTf();
   }, []);
+
+  // Update hardware info when ready or backend changes
+  useEffect(() => {
+    if (isReady) {
+      refreshHardwareInfo();
+    }
+  }, [isReady, backend, refreshHardwareInfo]);
 
   // Apply single-qubit gate using strided indexing
   const applySingleQubitGate = useCallback((
@@ -488,6 +600,10 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
     results,
     error,
     backend,
+    availableBackends,
+    hardwareInfo,
+    setBackend,
+    refreshHardwareInfo,
     executeCircuit,
     getStatevector,
     reset,

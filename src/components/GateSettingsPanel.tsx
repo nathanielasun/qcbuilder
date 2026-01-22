@@ -3,7 +3,7 @@
  */
 
 import React, { useMemo } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Trash2, X } from 'lucide-react';
 import { GateInstance } from '../types/circuit';
 import { GATE_DEFINITIONS, ANGLE_PRESETS, formatAngle } from '../utils/gateDefinitions';
 
@@ -65,9 +65,14 @@ export const GateSettingsPanel: React.FC<GateSettingsPanelProps> = ({
           </span>
           <span className="gate-settings-name">{definition.name}</span>
         </div>
-        <button className="gate-settings-delete" onClick={onRemove} title="Delete gate">
-          <Trash2 size={16} />
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="gate-settings-delete" onClick={onRemove} title="Delete gate">
+            <Trash2 size={16} />
+          </button>
+          <button className="close-button" onClick={onClose} title="Close">
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       <p className="gate-settings-description">{definition.description}</p>

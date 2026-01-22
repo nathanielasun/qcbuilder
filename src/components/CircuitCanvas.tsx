@@ -3,7 +3,8 @@
  */
 
 import React, { useRef, useState, useCallback, useMemo } from 'react';
-import { CircuitState, GateInstance } from '../types/circuit';
+import { Repeat } from 'lucide-react';
+import { CircuitState } from '../types/circuit';
 import { GATE_DEFINITIONS } from '../utils/gateDefinitions';
 import { GateBlock, ControlDot, ControlLine, SwapSymbol } from './GateBlock';
 
@@ -12,11 +13,14 @@ interface CircuitCanvasProps {
   numColumns: number;
   selectedGate: string | null;
   selectedInstance: string | null;
+  selectedRepeater: string | null;
   onGateAdd: (gateId: string, target: number, column: number, control?: number) => void;
   onGateMove: (instanceId: string, target: number, column: number, control?: number) => void;
   onGateSelect: (instanceId: string | null) => void;
   onGateRemove: (instanceId: string) => void;
   onGateEdit: (instanceId: string) => void;
+  onRepeaterSelect: (repeaterId: string | null) => void;
+  onRepeaterEdit?: (repeaterId: string) => void;
 }
 
 const CELL_SIZE = 60;
@@ -27,11 +31,14 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
   numColumns,
   selectedGate,
   selectedInstance,
+  selectedRepeater,
   onGateAdd,
   onGateMove,
   onGateSelect,
   onGateRemove,
   onGateEdit,
+  onRepeaterSelect,
+  onRepeaterEdit,
 }) => {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [dragOverCell, setDragOverCell] = useState<{ qubit: number; column: number } | null>(null);
@@ -512,6 +519,96 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
     return elements;
   };
 
+  // Render repeater blocks
+  const renderRepeaters = () => {
+    const elements: React.ReactNode[] = [];
+
+    for (const repeater of circuit.repeaters) {
+      const isSelected = selectedRepeater === repeater.id;
+      const x = repeater.columnStart * CELL_SIZE;
+      const y = repeater.qubitStart * CELL_SIZE;
+      const w = (repeater.columnEnd - repeater.columnStart + 1) * CELL_SIZE;
+      const h = (repeater.qubitEnd - repeater.qubitStart + 1) * CELL_SIZE;
+
+      elements.push(
+        <div
+          key={`repeater-${repeater.id}`}
+          className={`repeater-block ${isSelected ? 'selected' : ''}`}
+          style={{
+            position: 'absolute',
+            left: x - 6,
+            top: y - 6,
+            width: w + 12,
+            height: h + 12,
+            border: `3px dashed ${repeater.color}`,
+            borderRadius: 10,
+            backgroundColor: `${repeater.color}15`,
+            cursor: 'pointer',
+            zIndex: isSelected ? 15 : 10,
+            boxShadow: isSelected ? `0 0 0 3px ${repeater.color}50` : 'none',
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRepeaterSelect(repeater.id);
+          }}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            onRepeaterEdit?.(repeater.id);
+          }}
+        >
+          {/* Repeater label - positioned inside at top-left */}
+          <div
+            className="repeater-label"
+            style={{
+              position: 'absolute',
+              top: 4,
+              left: 4,
+              padding: '2px 6px',
+              backgroundColor: repeater.color,
+              color: 'white',
+              borderRadius: 4,
+              fontSize: 10,
+              fontWeight: 600,
+              fontFamily: "'JetBrains Mono', monospace",
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              whiteSpace: 'nowrap',
+              maxWidth: 'calc(100% - 8px)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            <Repeat size={9} />
+            {repeater.label || 'Repeat'}
+          </div>
+
+          {/* Repetition badge - positioned inside at bottom-right */}
+          <div
+            className="repeater-count"
+            style={{
+              position: 'absolute',
+              bottom: 4,
+              right: 4,
+              padding: '2px 6px',
+              backgroundColor: 'white',
+              color: repeater.color,
+              border: `2px solid ${repeater.color}`,
+              borderRadius: 10,
+              fontSize: 10,
+              fontWeight: 700,
+              fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            ×{repeater.repetitions}
+          </div>
+        </div>
+      );
+    }
+
+    return elements;
+  };
+
   return (
     <div className="circuit-canvas-container">
       <div className="circuit-canvas-scroll">
@@ -557,6 +654,7 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
           >
             {renderGrid()}
             {renderWires()}
+            {renderRepeaters()}
             {renderGates()}
           </div>
         </div>

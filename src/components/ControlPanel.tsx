@@ -3,7 +3,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { Play, Trash2, Download, Upload, Undo2, Redo2, Plus, Minus, Settings } from 'lucide-react';
+import { Play, Trash2, Download, Upload, Undo2, Redo2, Plus, Minus, Settings, Repeat } from 'lucide-react';
 import { SavedCircuit } from '../types/circuit';
 
 interface ControlPanelProps {
@@ -22,6 +22,7 @@ interface ControlPanelProps {
   onSave: () => SavedCircuit;
   onLoad: (circuit: SavedCircuit) => void;
   onNameChange: (name: string) => void;
+  onAddRepeater?: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -40,6 +41,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onSave,
   onLoad,
   onNameChange,
+  onAddRepeater,
 }) => {
   const [showSettings, setShowSettings] = useState(false);
 
@@ -157,6 +159,21 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         >
           <Settings size={18} />
         </button>
+
+        {onAddRepeater && (
+          <>
+            <div className="control-divider" />
+            <button
+              className="add-repeater-button"
+              onClick={onAddRepeater}
+              disabled={isExecuting}
+              title="Add repeater block"
+            >
+              <Repeat size={16} />
+              <span>Add Repeater</span>
+            </button>
+          </>
+        )}
       </div>
 
       {/* Settings panel */}

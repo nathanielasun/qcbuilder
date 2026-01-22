@@ -30,10 +30,23 @@ export interface GateInstance {
   column: number;
 }
 
+// Repeater block - represents a repeatable section of the circuit
+export interface RepeaterBlock {
+  id: string;
+  qubitStart: number;
+  qubitEnd: number;
+  columnStart: number;
+  columnEnd: number;
+  repetitions: number;
+  label?: string;
+  color: string;
+}
+
 // Circuit state
 export interface CircuitState {
   numQubits: number;
   gates: GateInstance[];
+  repeaters: RepeaterBlock[];
   name: string;
   description?: string;
 }
@@ -69,6 +82,15 @@ export interface SavedCircuit {
     controls?: number[];
     angle?: number;
     angles?: number[];
+  }>;
+  repeaters?: Array<{
+    qubitStart: number;
+    qubitEnd: number;
+    columnStart: number;
+    columnEnd: number;
+    repetitions: number;
+    label?: string;
+    color: string;
   }>;
   createdAt: string;
   updatedAt: string;

@@ -72,7 +72,7 @@ const StatevectorDisplay: React.FC<{
     <div className="statevector-display">
       <h4>Statevector</h4>
       <div className="amplitude-list">
-        {amplitudes.map(({ bitstring, re, im, mag, phase }) => (
+        {amplitudes.map(({ bitstring, re, im, mag }) => (
           <div key={bitstring} className="amplitude-row">
             <span className="amplitude-state">|{bitstring}⟩</span>
             <span className="amplitude-value">

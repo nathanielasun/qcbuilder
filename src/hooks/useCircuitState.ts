@@ -3,7 +3,7 @@
  */
 
 import { useState, useCallback, useMemo } from 'react';
-import { GateInstance, CircuitState, SavedCircuit } from '../types/circuit';
+import { GateInstance, CircuitState, SavedCircuit, RepeaterBlock } from '../types/circuit';
 
 const MAX_QUBITS = 10;
 const MAX_COLUMNS = 50;
@@ -22,6 +22,9 @@ export interface UseCircuitStateReturn {
   updateGateControl: (instanceId: string, control: number) => void;
   updateGateAngle: (instanceId: string, angle: number) => void;
   updateGateAngles: (instanceId: string, angles: number[]) => void;
+  addRepeater: (qubitStart: number, qubitEnd: number, columnStart: number, columnEnd: number, repetitions?: number, label?: string) => string;
+  removeRepeater: (repeaterId: string) => void;
+  updateRepeater: (repeaterId: string, updates: Partial<Omit<RepeaterBlock, 'id'>>) => void;
   setNumQubits: (n: number) => void;
   clearCircuit: () => void;
   loadCircuit: (saved: SavedCircuit) => void;
@@ -34,10 +37,21 @@ export interface UseCircuitStateReturn {
   canRedo: boolean;
 }
 
+// Repeater colors for visual distinction
+const REPEATER_COLORS = [
+  '#6366F1', // Indigo
+  '#EC4899', // Pink
+  '#F59E0B', // Amber
+  '#10B981', // Emerald
+  '#8B5CF6', // Violet
+  '#06B6D4', // Cyan
+];
+
 export function useCircuitState(initialQubits: number = 3): UseCircuitStateReturn {
   const [circuit, setCircuit] = useState<CircuitState>({
     numQubits: initialQubits,
     gates: [],
+    repeaters: [],
     name: 'Untitled Circuit',
     description: '',
   });
@@ -156,6 +170,55 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     }));
   }, [saveToHistory]);
 
+  // Add repeater block
+  const addRepeater = useCallback((
+    qubitStart: number,
+    qubitEnd: number,
+    columnStart: number,
+    columnEnd: number,
+    repetitions: number = 2,
+    label?: string
+  ): string => {
+    saveToHistory();
+    const id = generateId();
+    const colorIndex = circuit.repeaters.length % REPEATER_COLORS.length;
+    const newRepeater: RepeaterBlock = {
+      id,
+      qubitStart: Math.min(qubitStart, qubitEnd),
+      qubitEnd: Math.max(qubitStart, qubitEnd),
+      columnStart: Math.min(columnStart, columnEnd),
+      columnEnd: Math.max(columnStart, columnEnd),
+      repetitions,
+      label,
+      color: REPEATER_COLORS[colorIndex],
+    };
+    setCircuit(c => ({
+      ...c,
+      repeaters: [...c.repeaters, newRepeater],
+    }));
+    return id;
+  }, [saveToHistory, circuit.repeaters.length]);
+
+  // Remove repeater block
+  const removeRepeater = useCallback((repeaterId: string) => {
+    saveToHistory();
+    setCircuit(c => ({
+      ...c,
+      repeaters: c.repeaters.filter(r => r.id !== repeaterId),
+    }));
+  }, [saveToHistory]);
+
+  // Update repeater block
+  const updateRepeater = useCallback((repeaterId: string, updates: Partial<Omit<RepeaterBlock, 'id'>>) => {
+    saveToHistory();
+    setCircuit(c => ({
+      ...c,
+      repeaters: c.repeaters.map(r =>
+        r.id === repeaterId ? { ...r, ...updates } : r
+      ),
+    }));
+  }, [saveToHistory]);
+
   // Set number of qubits
   const setNumQubits = useCallback((n: number) => {
     if (n < 1 || n > MAX_QUBITS) return;
@@ -169,6 +232,8 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
         if (g.control !== undefined && g.control >= n) return false;
         return true;
       }),
+      // Remove repeaters that are out of bounds
+      repeaters: c.repeaters.filter(r => r.qubitEnd < n),
     }));
   }, [saveToHistory]);
 
@@ -178,6 +243,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     setCircuit(c => ({
       ...c,
       gates: [],
+      repeaters: [],
     }));
   }, [saveToHistory]);
 
@@ -197,6 +263,16 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
         ...(g.controls !== undefined && { controls: g.controls }),
         ...(g.angle !== undefined && { angle: g.angle }),
         ...(g.angles !== undefined && { angles: g.angles }),
+      })),
+      repeaters: (saved.repeaters || []).map((r, i) => ({
+        id: generateId(),
+        qubitStart: r.qubitStart,
+        qubitEnd: r.qubitEnd,
+        columnStart: r.columnStart,
+        columnEnd: r.columnEnd,
+        repetitions: r.repetitions,
+        label: r.label,
+        color: r.color || REPEATER_COLORS[i % REPEATER_COLORS.length],
       })),
     });
 
@@ -239,6 +315,15 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
         ...(g.controls !== undefined && { controls: g.controls }),
         ...(g.angle !== undefined && { angle: g.angle }),
         ...(g.angles !== undefined && { angles: g.angles }),
+      })),
+      repeaters: circuit.repeaters.map(r => ({
+        qubitStart: r.qubitStart,
+        qubitEnd: r.qubitEnd,
+        columnStart: r.columnStart,
+        columnEnd: r.columnEnd,
+        repetitions: r.repetitions,
+        label: r.label,
+        color: r.color,
       })),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -283,6 +368,9 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     updateGateControl,
     updateGateAngle,
     updateGateAngles,
+    addRepeater,
+    removeRepeater,
+    updateRepeater,
     setNumQubits,
     clearCircuit,
     loadCircuit,

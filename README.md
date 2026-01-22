@@ -17,6 +17,11 @@ A web-based interface for building, saving, and running quantum circuits using T
 
 ## Installation
 
+**Quick Run**
+```bash/zsh
+./builder.sh
+```
+
 ```bash
 cd web_qc_builder
 npm install

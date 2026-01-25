@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { GateInstance, CircuitState, SavedCircuit, RepeaterBlock } from '../types/circuit';
+import { GateInstance, CircuitState, SavedCircuit } from '../types/circuit';
 import { validateSavedCircuit } from '../utils/circuitValidator';
 import { CIRCUIT_LIMITS, STORAGE_KEYS } from '../config';
 
@@ -33,18 +33,9 @@ function loadSavedState(): CircuitState | null {
             target: g.target as number,
             column: (g.column as number) || 0,
             ...(g.control !== undefined && { control: g.control as number }),
+            ...(g.controls !== undefined && { controls: g.controls as number[] }),
             ...(g.angle !== undefined && { angle: g.angle as number }),
             ...(g.angles !== undefined && { angles: g.angles as number[] }),
-          })),
-          repeaters: (parsed.repeaters || []).map((r: Record<string, unknown>, i: number) => ({
-            id: generateId(),
-            qubitStart: r.qubitStart as number,
-            qubitEnd: r.qubitEnd as number,
-            columnStart: r.columnStart as number,
-            columnEnd: r.columnEnd as number,
-            repetitions: r.repetitions as number,
-            label: r.label as string | undefined,
-            color: (r.color as string) || REPEATER_COLORS[i % REPEATER_COLORS.length],
           })),
         };
       }
@@ -63,7 +54,8 @@ export interface ValidationError {
 export interface UseCircuitStateReturn {
   circuit: CircuitState;
   numColumns: number;
-  addGate: (gateId: string, target: number, column: number, control?: number, angle?: number, angles?: number[]) => ValidationError | null;
+  addGate: (gateId: string, target: number, column: number, control?: number, angle?: number, angles?: number[], controls?: number[]) => ValidationError | null;
+  addGates: (gates: GateInstance[]) => void;
   removeGate: (instanceId: string) => void;
   removeGates: (instanceIds: string[]) => void;
   moveGate: (instanceId: string, newTarget: number, newColumn: number, newControl?: number) => ValidationError | null;
@@ -72,9 +64,6 @@ export interface UseCircuitStateReturn {
   updateGateAngle: (instanceId: string, angle: number) => void;
   updateGateAngles: (instanceId: string, angles: number[]) => void;
   duplicateGates: (instanceIds: string[], columnOffset: number, qubitOffset: number) => { newIds: string[]; skipped: number };
-  addRepeater: (qubitStart: number, qubitEnd: number, columnStart: number, columnEnd: number, repetitions?: number, label?: string) => string;
-  removeRepeater: (repeaterId: string) => void;
-  updateRepeater: (repeaterId: string, updates: Partial<Omit<RepeaterBlock, 'id'>>) => void;
   setNumQubits: (n: number) => void;
   clearCircuit: () => void;
   newCircuit: () => void;
@@ -89,16 +78,6 @@ export interface UseCircuitStateReturn {
   canRedo: boolean;
 }
 
-// Repeater colors for visual distinction
-const REPEATER_COLORS = [
-  '#6366F1', // Indigo
-  '#EC4899', // Pink
-  '#F59E0B', // Amber
-  '#10B981', // Emerald
-  '#8B5CF6', // Violet
-  '#06B6D4', // Cyan
-];
-
 export function useCircuitState(initialQubits: number = 3): UseCircuitStateReturn {
   // Try to load saved state, fall back to default
   const [circuit, setCircuit] = useState<CircuitState>(() => {
@@ -106,7 +85,6 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     return saved || {
       numQubits: initialQubits,
       gates: [],
-      repeaters: [],
       name: 'Untitled Circuit',
       description: '',
     };
@@ -129,17 +107,9 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
             target: g.target,
             column: g.column,
             ...(g.control !== undefined && { control: g.control }),
+            ...(g.controls !== undefined && { controls: g.controls }),
             ...(g.angle !== undefined && { angle: g.angle }),
             ...(g.angles !== undefined && { angles: g.angles }),
-          })),
-          repeaters: circuit.repeaters.map(r => ({
-            qubitStart: r.qubitStart,
-            qubitEnd: r.qubitEnd,
-            columnStart: r.columnStart,
-            columnEnd: r.columnEnd,
-            repetitions: r.repetitions,
-            label: r.label,
-            color: r.color,
           })),
         };
         localStorage.setItem(STORAGE_KEYS.AUTOSAVE, JSON.stringify(toSave));
@@ -166,6 +136,8 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
       if (g.target === qubit && g.column === column) return true;
       // Check control position for two-qubit gates
       if (g.control !== undefined && g.control === qubit && g.column === column) return true;
+      // Check controls for multi-qubit gates
+      if (g.controls && g.controls.includes(qubit) && g.column === column) return true;
       return false;
     });
   }, [circuit.gates]);
@@ -183,7 +155,8 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     column: number,
     control?: number,
     angle?: number,
-    angles?: number[]
+    angles?: number[],
+    controls?: number[]
   ): ValidationError | null => {
     // Validate qubit bounds
     if (target < 0 || target >= circuit.numQubits) {
@@ -197,6 +170,18 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
       }
       if (control === target) {
         return { type: 'error', message: 'Control qubit cannot be the same as target qubit' };
+      }
+    }
+
+    // Validate controls array (for multi-control gates)
+    if (controls !== undefined) {
+      for (const ctrl of controls) {
+        if (ctrl < 0 || ctrl >= circuit.numQubits) {
+          return { type: 'error', message: `Control qubit ${ctrl} is out of bounds (0-${circuit.numQubits - 1})` };
+        }
+        if (ctrl === target) {
+          return { type: 'error', message: 'Control qubit cannot be the same as target qubit' };
+        }
       }
     }
 
@@ -215,6 +200,15 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
       return { type: 'error', message: `Cell at qubit ${control}, column ${column} is already occupied` };
     }
 
+    // Check for collision at controls positions
+    if (controls !== undefined) {
+      for (const ctrl of controls) {
+        if (isCellOccupied(ctrl, column)) {
+          return { type: 'error', message: `Cell at qubit ${ctrl}, column ${column} is already occupied` };
+        }
+      }
+    }
+
     saveToHistory();
 
     const newGate: GateInstance = {
@@ -223,6 +217,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
       target,
       column,
       ...(control !== undefined && { control }),
+      ...(controls !== undefined && { controls }),
       ...(angle !== undefined && { angle }),
       ...(angles !== undefined && { angles }),
     };
@@ -234,6 +229,16 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
 
     return null; // Success
   }, [circuit.numQubits, isCellOccupied, saveToHistory]);
+
+  // Add multiple gates at once (for pattern placement)
+  const addGates = useCallback((gates: GateInstance[]) => {
+    if (gates.length === 0) return;
+    saveToHistory();
+    setCircuit(c => ({
+      ...c,
+      gates: [...c.gates, ...gates],
+    }));
+  }, [saveToHistory]);
 
   // Remove gate from circuit
   const removeGate = useCallback((instanceId: string) => {
@@ -399,11 +404,17 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
         if (gate.control !== undefined) {
           occupied.add(`${gate.control},${gate.column}`);
         }
+        if (gate.controls) {
+          for (const ctrl of gate.controls) {
+            occupied.add(`${ctrl},${gate.column}`);
+          }
+        }
       }
 
       for (const gate of gatesToDuplicate) {
         const newTarget = gate.target + qubitOffset;
         const newControl = gate.control !== undefined ? gate.control + qubitOffset : undefined;
+        const newControls = gate.controls ? gate.controls.map(ctrl => ctrl + qubitOffset) : undefined;
         const newColumn = gate.column + columnOffset;
 
         // Check bounds
@@ -412,6 +423,10 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
           continue;
         }
         if (newControl !== undefined && (newControl < 0 || newControl >= c.numQubits)) {
+          skipped++;
+          continue;
+        }
+        if (newControls && newControls.some(ctrl => ctrl < 0 || ctrl >= c.numQubits)) {
           skipped++;
           continue;
         }
@@ -436,6 +451,21 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
           }
         }
 
+        // Check collision at controls
+        if (newControls) {
+          let hasCollision = false;
+          for (const ctrl of newControls) {
+            if (occupied.has(`${ctrl},${newColumn}`)) {
+              hasCollision = true;
+              break;
+            }
+          }
+          if (hasCollision) {
+            skipped++;
+            continue;
+          }
+        }
+
         const newId = generateId();
         newIds.push(newId);
 
@@ -444,6 +474,11 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
         if (newControl !== undefined) {
           occupied.add(`${newControl},${newColumn}`);
         }
+        if (newControls) {
+          for (const ctrl of newControls) {
+            occupied.add(`${ctrl},${newColumn}`);
+          }
+        }
 
         newGates.push({
           ...gate,
@@ -451,6 +486,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
           target: newTarget,
           column: newColumn,
           ...(newControl !== undefined && { control: newControl }),
+          ...(newControls && { controls: newControls }),
         });
       }
 
@@ -461,55 +497,6 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     });
 
     return { newIds, skipped };
-  }, [saveToHistory]);
-
-  // Add repeater block
-  const addRepeater = useCallback((
-    qubitStart: number,
-    qubitEnd: number,
-    columnStart: number,
-    columnEnd: number,
-    repetitions: number = 2,
-    label?: string
-  ): string => {
-    saveToHistory();
-    const id = generateId();
-    const colorIndex = circuit.repeaters.length % REPEATER_COLORS.length;
-    const newRepeater: RepeaterBlock = {
-      id,
-      qubitStart: Math.min(qubitStart, qubitEnd),
-      qubitEnd: Math.max(qubitStart, qubitEnd),
-      columnStart: Math.min(columnStart, columnEnd),
-      columnEnd: Math.max(columnStart, columnEnd),
-      repetitions,
-      label,
-      color: REPEATER_COLORS[colorIndex],
-    };
-    setCircuit(c => ({
-      ...c,
-      repeaters: [...c.repeaters, newRepeater],
-    }));
-    return id;
-  }, [saveToHistory, circuit.repeaters.length]);
-
-  // Remove repeater block
-  const removeRepeater = useCallback((repeaterId: string) => {
-    saveToHistory();
-    setCircuit(c => ({
-      ...c,
-      repeaters: c.repeaters.filter(r => r.id !== repeaterId),
-    }));
-  }, [saveToHistory]);
-
-  // Update repeater block
-  const updateRepeater = useCallback((repeaterId: string, updates: Partial<Omit<RepeaterBlock, 'id'>>) => {
-    saveToHistory();
-    setCircuit(c => ({
-      ...c,
-      repeaters: c.repeaters.map(r =>
-        r.id === repeaterId ? { ...r, ...updates } : r
-      ),
-    }));
   }, [saveToHistory]);
 
   // Set number of qubits
@@ -523,10 +510,9 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
       gates: c.gates.filter(g => {
         if (g.target >= n) return false;
         if (g.control !== undefined && g.control >= n) return false;
+        if (g.controls && g.controls.some(ctrl => ctrl >= n)) return false;
         return true;
       }),
-      // Remove repeaters that are out of bounds
-      repeaters: c.repeaters.filter(r => r.qubitEnd < n),
     }));
   }, [saveToHistory]);
 
@@ -536,7 +522,6 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     setCircuit(c => ({
       ...c,
       gates: [],
-      repeaters: [],
     }));
   }, [saveToHistory]);
 
@@ -546,7 +531,6 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     setCircuit({
       numQubits: 3,
       gates: [],
-      repeaters: [],
       name: 'Untitled Circuit',
       description: '',
     });
@@ -570,16 +554,6 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
         ...(g.controls !== undefined && { controls: g.controls }),
         ...(g.angle !== undefined && { angle: g.angle }),
         ...(g.angles !== undefined && { angles: g.angles }),
-      })),
-      repeaters: (saved.repeaters || []).map((r, i) => ({
-        id: generateId(),
-        qubitStart: r.qubitStart,
-        qubitEnd: r.qubitEnd,
-        columnStart: r.columnStart,
-        columnEnd: r.columnEnd,
-        repetitions: r.repetitions,
-        label: r.label,
-        color: r.color || REPEATER_COLORS[i % REPEATER_COLORS.length],
       })),
     });
 
@@ -623,15 +597,6 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
         ...(g.angle !== undefined && { angle: g.angle }),
         ...(g.angles !== undefined && { angles: g.angles }),
       })),
-      repeaters: circuit.repeaters.map(r => ({
-        qubitStart: r.qubitStart,
-        qubitEnd: r.qubitEnd,
-        columnStart: r.columnStart,
-        columnEnd: r.columnEnd,
-        repetitions: r.repetitions,
-        label: r.label,
-        color: r.color,
-      })),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -669,6 +634,7 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     circuit,
     numColumns,
     addGate,
+    addGates,
     removeGate,
     removeGates,
     moveGate,
@@ -677,9 +643,6 @@ export function useCircuitState(initialQubits: number = 3): UseCircuitStateRetur
     updateGateAngle,
     updateGateAngles,
     duplicateGates,
-    addRepeater,
-    removeRepeater,
-    updateRepeater,
     setNumQubits,
     clearCircuit,
     newCircuit,

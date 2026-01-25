@@ -178,6 +178,35 @@ export const GATE_DEFINITIONS: Record<string, GateDefinition> = {
     color: '#2C3E50',
   },
 
+  // Multi-control gates
+  CCX: {
+    id: 'CCX',
+    name: 'Toffoli',
+    symbol: 'CCX',
+    category: 'multi',
+    numQubits: 3,
+    description: 'Controlled-controlled-NOT (Toffoli) gate',
+    color: '#1A252F',
+  },
+  CCZ: {
+    id: 'CCZ',
+    name: 'CCZ Gate',
+    symbol: 'CCZ',
+    category: 'multi',
+    numQubits: 3,
+    description: 'Controlled-controlled-Z gate',
+    color: '#1A252F',
+  },
+  CSWAP: {
+    id: 'CSWAP',
+    name: 'Fredkin',
+    symbol: 'CSW',
+    category: 'multi',
+    numQubits: 3,
+    description: 'Controlled-SWAP (Fredkin) gate',
+    color: '#1A252F',
+  },
+
   // Measurement
   M: {
     id: 'M',
@@ -206,6 +235,11 @@ export const GATE_CATEGORIES = [
     id: 'controlled',
     name: 'Two-Qubit',
     gates: ['CNOT', 'CZ', 'SWAP'],
+  },
+  {
+    id: 'multi',
+    name: 'Multi-Control',
+    gates: ['CCX', 'CCZ', 'CSWAP'],
   },
   {
     id: 'measurement',

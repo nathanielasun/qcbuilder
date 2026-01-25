@@ -11,7 +11,6 @@ export { AngleEditor } from './AngleEditor';
 export { GateSettingsPanel } from './GateSettingsPanel';
 export { ConfirmDialog } from './ConfirmDialog';
 export { PresetCircuits } from './PresetCircuits';
-export { RepeaterEditor } from './RepeaterEditor';
-export { RepeaterSettingsPanel } from './RepeaterSettingsPanel';
+export { PatternPanel } from './PatternPanel';
 export { HardwareSettingsPanel } from './HardwareSettingsPanel';
 export { ErrorBoundary } from './ErrorBoundary';

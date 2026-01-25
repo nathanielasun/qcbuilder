@@ -6,9 +6,10 @@ export type {
   GateCategory,
   GateDefinition,
   GateInstance,
-  RepeaterBlock,
   CircuitState,
   ExecutionResults,
   Complex,
   SavedCircuit,
+  PatternGate,
+  CircuitPattern,
 } from './circuit';

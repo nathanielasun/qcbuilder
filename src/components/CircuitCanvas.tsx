@@ -3,8 +3,7 @@
  */
 
 import React, { useRef, useState, useCallback, useMemo } from 'react';
-import { Repeat } from 'lucide-react';
-import { CircuitState } from '../types/circuit';
+import { CircuitState, CircuitPattern } from '../types/circuit';
 import { GATE_DEFINITIONS } from '../utils/gateDefinitions';
 import { GateBlock, ControlDot, ControlLine, SwapSymbol } from './GateBlock';
 
@@ -12,16 +11,14 @@ interface CircuitCanvasProps {
   circuit: CircuitState;
   numColumns: number;
   selectedGate: string | null;
+  selectedPattern: CircuitPattern | null;
   selectedInstances: Set<string>;
-  selectedRepeater: string | null;
-  onGateAdd: (gateId: string, target: number, column: number, control?: number) => void;
+  onGateAdd: (gateId: string, target: number, column: number, control?: number, controls?: number[]) => void;
   onGateMove: (instanceId: string, target: number, column: number, control?: number) => void;
   onGateSelect: (instanceId: string | null, addToSelection?: boolean) => void;
   onMultiSelect: (instanceIds: string[]) => void;
   onGateRemove: (instanceId: string) => void;
   onGateEdit: (instanceId: string) => void;
-  onRepeaterSelect: (repeaterId: string | null) => void;
-  onRepeaterEdit?: (repeaterId: string) => void;
 }
 
 interface SelectionBox {
@@ -33,21 +30,20 @@ interface SelectionBox {
 
 const CELL_SIZE = 60;
 const QUBIT_LABEL_WIDTH = 50;
+const GRID_PADDING = 8; // Padding to prevent clipping of selection borders
 
 export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
   circuit,
   numColumns,
   selectedGate,
+  selectedPattern,
   selectedInstances,
-  selectedRepeater,
   onGateAdd,
   onGateMove,
   onGateSelect,
   onMultiSelect,
   onGateRemove,
   onGateEdit,
-  onRepeaterSelect,
-  onRepeaterEdit,
 }) => {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [dragOverCell, setDragOverCell] = useState<{ qubit: number; column: number } | null>(null);
@@ -58,12 +54,15 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
   const width = numColumns * CELL_SIZE;
   const height = circuit.numQubits * CELL_SIZE;
 
-  // Check if selected gate is a two-qubit gate
-  const selectedGateIsTwoQubit = useMemo(() => {
-    if (!selectedGate) return false;
+  // Check if selected gate is a multi-qubit gate
+  const selectedGateNumQubits = useMemo(() => {
+    if (!selectedGate) return 1;
     const def = GATE_DEFINITIONS[selectedGate];
-    return def?.numQubits === 2;
+    return def?.numQubits ?? 1;
   }, [selectedGate]);
+
+  const selectedGateIsTwoQubit = selectedGateNumQubits === 2;
+  const selectedGateIsThreeQubit = selectedGateNumQubits === 3;
 
   // Get the second qubit for two-qubit gate placement (adjacent qubit)
   const getAdjacentQubit = useCallback((qubit: number): number => {
@@ -74,12 +73,24 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
     return qubit - 1;
   }, [circuit.numQubits]);
 
-  // Get cell from mouse position
+  // Get qubits for three-qubit gate placement (clicked qubit + 2 more)
+  const getThreeQubitRange = useCallback((qubit: number): number[] => {
+    // Prefer qubits below, but adjust if at bottom
+    if (qubit <= circuit.numQubits - 3) {
+      return [qubit, qubit + 1, qubit + 2];
+    } else if (qubit === circuit.numQubits - 2) {
+      return [qubit - 1, qubit, qubit + 1];
+    } else {
+      return [qubit - 2, qubit - 1, qubit];
+    }
+  }, [circuit.numQubits]);
+
+  // Get cell from mouse position (accounting for padding)
   const getCellFromPosition = useCallback((clientX: number, clientY: number) => {
     if (!canvasRef.current) return null;
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
+    const x = clientX - rect.left - GRID_PADDING;
+    const y = clientY - rect.top - GRID_PADDING;
 
     const column = Math.floor(x / CELL_SIZE);
     const qubit = Math.floor(y / CELL_SIZE);
@@ -103,11 +114,18 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
       // Check control qubit for two-qubit gates
       if (g.control !== undefined && g.control === qubit) return true;
 
-      // Check if this is a two-qubit gate that spans this qubit
+      // Check controls array for multi-control gates
+      if (g.controls !== undefined && g.controls.includes(qubit)) return true;
+
+      // Check if this is a multi-qubit gate that spans this qubit
       const def = GATE_DEFINITIONS[g.gateId];
-      if (def && def.numQubits === 2 && g.control !== undefined) {
-        const minQ = Math.min(g.target, g.control);
-        const maxQ = Math.max(g.target, g.control);
+      if (def && def.numQubits >= 2) {
+        const allQubits = [g.target];
+        if (g.control !== undefined) allQubits.push(g.control);
+        if (g.controls !== undefined) allQubits.push(...g.controls);
+
+        const minQ = Math.min(...allQubits);
+        const maxQ = Math.max(...allQubits);
         if (qubit > minQ && qubit < maxQ) return true;
       }
 
@@ -121,6 +139,13 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
     const adjacentQubit = getAdjacentQubit(qubit);
     return !isCellOccupied(qubit, column) && !isCellOccupied(adjacentQubit, column);
   }, [circuit.numQubits, getAdjacentQubit, isCellOccupied]);
+
+  // Check if three-qubit gate can be placed
+  const canPlaceThreeQubitGate = useCallback((qubit: number, column: number): boolean => {
+    if (circuit.numQubits < 3) return false;
+    const qubits = getThreeQubitRange(qubit);
+    return qubits.every(q => !isCellOccupied(q, column));
+  }, [circuit.numQubits, getThreeQubitRange, isCellOccupied]);
 
   // Handle mouse leave
   const handleMouseLeave = useCallback(() => {
@@ -150,6 +175,16 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
           gateBottom = Math.max(gateBottom, controlBottom);
         }
 
+        // For multi-control gates, extend to include all controls
+        if (gate.controls !== undefined) {
+          for (const ctrl of gate.controls) {
+            const controlTop = ctrl * CELL_SIZE;
+            const controlBottom = controlTop + CELL_SIZE;
+            gateTop = Math.min(gateTop, controlTop);
+            gateBottom = Math.max(gateBottom, controlBottom);
+          }
+        }
+
         // Check if gate intersects with selection rectangle
         return gateLeft < maxX && gateRight > minX && gateTop < maxY && gateBottom > minY;
       })
@@ -158,18 +193,19 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
 
   // Handle mouse down for box selection
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    // Only start box selection on left click, and when no gate is being placed
-    if (e.button !== 0 || selectedGate) return;
+    // Only start box selection on left click, and when no gate or pattern is being placed
+    if (e.button !== 0 || selectedGate || selectedPattern) return;
 
     // Don't start selection if clicking on a gate
     const target = e.target as HTMLElement;
-    if (target.closest('.gate-block') || target.closest('.repeater-block')) return;
+    if (target.closest('.gate-block')) return;
 
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // Account for padding when calculating position
+    const x = e.clientX - rect.left - GRID_PADDING;
+    const y = e.clientY - rect.top - GRID_PADDING;
 
     setIsBoxSelecting(true);
     setSelectionBox({
@@ -178,7 +214,7 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
       currentX: x,
       currentY: y,
     });
-  }, [selectedGate]);
+  }, [selectedGate, selectedPattern]);
 
   // Handle mouse move for box selection
   const handleMouseMoveSelection = useCallback((e: React.MouseEvent) => {
@@ -192,8 +228,9 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // Account for padding when calculating position
+    const x = e.clientX - rect.left - GRID_PADDING;
+    const y = e.clientY - rect.top - GRID_PADDING;
 
     setSelectionBox(prev => prev ? {
       ...prev,
@@ -208,14 +245,14 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
 
     // Calculate selection rectangle
     const { startX, startY, currentX, currentY } = selectionBox;
-    const selectedIds = getGatesInRect(startX, startY, currentX, currentY);
+    const selectedGateIds = getGatesInRect(startX, startY, currentX, currentY);
 
     // If shift is held, add to existing selection
     if (e.shiftKey) {
-      const combined = new Set([...selectedInstances, ...selectedIds]);
-      onMultiSelect([...combined]);
+      const combinedGates = new Set([...selectedInstances, ...selectedGateIds]);
+      onMultiSelect([...combinedGates]);
     } else {
-      onMultiSelect(selectedIds);
+      onMultiSelect(selectedGateIds);
     }
 
     setIsBoxSelecting(false);
@@ -233,12 +270,34 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
       return;
     }
 
+    // If a pattern is selected, trigger pattern placement via onGateAdd
+    // The pattern logic is handled in App.tsx's handleGateAdd
+    if (selectedPattern) {
+      // Pass a dummy gate ID - the pattern logic takes over in App.tsx
+      onGateAdd('PATTERN', cell.qubit, cell.column);
+      return;
+    }
+
     // If a gate is selected in palette
     if (selectedGate) {
       const def = GATE_DEFINITIONS[selectedGate];
       if (!def) return;
 
-      if (def.numQubits === 2) {
+      if (def.numQubits === 3) {
+        // Three-qubit gate: place on clicked qubit and two adjacent qubits
+        if (!canPlaceThreeQubitGate(cell.qubit, cell.column)) return;
+
+        const qubits = getThreeQubitRange(cell.qubit);
+        // For CCX/CCZ: two controls and one target (target is bottom qubit)
+        // For CSWAP: one control and two swap targets
+        if (selectedGate === 'CSWAP') {
+          // CSWAP: control=top, swap qubits are middle and bottom
+          onGateAdd(selectedGate, qubits[2], cell.column, qubits[0], [qubits[1], qubits[2]]);
+        } else {
+          // CCX/CCZ: controls=[0,1], target=2
+          onGateAdd(selectedGate, qubits[2], cell.column, undefined, [qubits[0], qubits[1]]);
+        }
+      } else if (def.numQubits === 2) {
         // Two-qubit gate: place on clicked qubit and adjacent qubit
         if (!canPlaceTwoQubitGate(cell.qubit, cell.column)) return;
 
@@ -265,8 +324,11 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
     isBoxSelecting,
     getCellFromPosition,
     selectedGate,
+    selectedPattern,
     canPlaceTwoQubitGate,
+    canPlaceThreeQubitGate,
     getAdjacentQubit,
+    getThreeQubitRange,
     isCellOccupied,
     onGateAdd,
     onGateSelect,
@@ -399,14 +461,20 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
     // Determine which cells to highlight
     const highlightedCells = new Set<string>();
 
-    if (hoverCell && selectedGateIsTwoQubit && circuit.numQubits >= 2) {
+    if (hoverCell && selectedGateIsThreeQubit && circuit.numQubits >= 3) {
+      const canPlace = canPlaceThreeQubitGate(hoverCell.qubit, hoverCell.column);
+      if (canPlace) {
+        const qubits = getThreeQubitRange(hoverCell.qubit);
+        qubits.forEach(q => highlightedCells.add(`${q}-${hoverCell.column}`));
+      }
+    } else if (hoverCell && selectedGateIsTwoQubit && circuit.numQubits >= 2) {
       const adjacentQubit = getAdjacentQubit(hoverCell.qubit);
       const canPlace = canPlaceTwoQubitGate(hoverCell.qubit, hoverCell.column);
       if (canPlace) {
         highlightedCells.add(`${hoverCell.qubit}-${hoverCell.column}`);
         highlightedCells.add(`${adjacentQubit}-${hoverCell.column}`);
       }
-    } else if (hoverCell && selectedGate && !selectedGateIsTwoQubit) {
+    } else if (hoverCell && selectedGate && !selectedGateIsTwoQubit && !selectedGateIsThreeQubit) {
       if (!isCellOccupied(hoverCell.qubit, hoverCell.column)) {
         highlightedCells.add(`${hoverCell.qubit}-${hoverCell.column}`);
       }
@@ -454,8 +522,147 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
 
       const isSelected = selectedInstances.has(gate.id);
 
+      // Render three-qubit gate connections (CCX, CCZ, CSWAP)
+      if (def.numQubits === 3 && gate.controls !== undefined) {
+        const allQubits = [...gate.controls, gate.target];
+        const minQ = Math.min(...allQubits);
+        const maxQ = Math.max(...allQubits);
+
+        // Selection highlight for three-qubit gates
+        if (isSelected) {
+          elements.push(
+            <div
+              key={`selection-${gate.id}`}
+              style={{
+                position: 'absolute',
+                left: gate.column * CELL_SIZE - 4,
+                top: minQ * CELL_SIZE - 4,
+                width: CELL_SIZE + 8,
+                height: (maxQ - minQ + 1) * CELL_SIZE + 8,
+                border: '2px solid #4A90D9',
+                borderRadius: 8,
+                backgroundColor: 'rgba(74, 144, 217, 0.1)',
+                zIndex: 0,
+                pointerEvents: 'none',
+              }}
+            />
+          );
+        }
+
+        // Control line spanning all qubits
+        elements.push(
+          <ControlLine
+            key={`line-${gate.id}`}
+            column={gate.column}
+            fromQubit={minQ}
+            toQubit={maxQ}
+            cellSize={CELL_SIZE}
+          />
+        );
+
+        // Clickable area for the whole gate
+        elements.push(
+          <div
+            key={`multi-click-${gate.id}`}
+            style={{
+              position: 'absolute',
+              left: gate.column * CELL_SIZE,
+              top: minQ * CELL_SIZE,
+              width: CELL_SIZE,
+              height: (maxQ - minQ + 1) * CELL_SIZE,
+              cursor: 'pointer',
+              zIndex: 4,
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onGateSelect(gate.id, e.shiftKey || e.ctrlKey || e.metaKey);
+            }}
+            onDoubleClick={() => onGateEdit(gate.id)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onGateRemove(gate.id);
+            }}
+          />
+        );
+
+        if (gate.gateId === 'CSWAP') {
+          // CSWAP: one control dot + two swap symbols
+          elements.push(
+            <ControlDot
+              key={`ctrl-${gate.id}`}
+              x={gate.column}
+              y={gate.controls[0]}
+              cellSize={CELL_SIZE}
+            />
+          );
+          elements.push(
+            <SwapSymbol
+              key={`swap1-${gate.id}`}
+              x={gate.column}
+              y={gate.controls[1]}
+              cellSize={CELL_SIZE}
+            />
+          );
+          elements.push(
+            <SwapSymbol
+              key={`swap2-${gate.id}`}
+              x={gate.column}
+              y={gate.target}
+              cellSize={CELL_SIZE}
+            />
+          );
+        } else if (gate.gateId === 'CCX') {
+          // CCX (Toffoli): two control dots + target circle with plus
+          gate.controls.forEach((ctrl, idx) => {
+            elements.push(
+              <ControlDot
+                key={`ctrl-${gate.id}-${idx}`}
+                x={gate.column}
+                y={ctrl}
+                cellSize={CELL_SIZE}
+              />
+            );
+          });
+          elements.push(
+            <div
+              key={`target-${gate.id}`}
+              style={{
+                position: 'absolute',
+                left: gate.column * CELL_SIZE + CELL_SIZE / 2 - 15,
+                top: gate.target * CELL_SIZE + CELL_SIZE / 2 - 15,
+                width: 30,
+                height: 30,
+                border: '3px solid #1A252F',
+                borderRadius: '50%',
+                backgroundColor: 'white',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 20,
+                fontWeight: 'bold',
+                color: '#1A252F',
+                zIndex: 5,
+                pointerEvents: 'none',
+              }}
+            >
+              +
+            </div>
+          );
+        } else if (gate.gateId === 'CCZ') {
+          // CCZ: all three are control dots
+          allQubits.forEach((q, idx) => {
+            elements.push(
+              <ControlDot
+                key={`ctrl-${gate.id}-${idx}`}
+                x={gate.column}
+                y={q}
+                cellSize={CELL_SIZE}
+              />
+            );
+          });
+        }
+      } else if (def.numQubits === 2 && gate.control !== undefined) {
       // Render two-qubit gate connections
-      if (def.numQubits === 2 && gate.control !== undefined) {
         // Selection highlight for two-qubit gates
         if (isSelected) {
           const minQ = Math.min(gate.target, gate.control);
@@ -637,90 +844,36 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
     return elements;
   };
 
-  // Render repeater blocks
-  const renderRepeaters = () => {
+  // Render pattern preview when hovering with a selected pattern
+  const renderPatternPreview = () => {
+    if (!selectedPattern || !hoverCell) return null;
+
     const elements: React.ReactNode[] = [];
+    const baseQubit = hoverCell.qubit;
+    const baseColumn = hoverCell.column;
 
-    for (const repeater of circuit.repeaters) {
-      const isSelected = selectedRepeater === repeater.id;
-      const x = repeater.columnStart * CELL_SIZE;
-      const y = repeater.qubitStart * CELL_SIZE;
-      const w = (repeater.columnEnd - repeater.columnStart + 1) * CELL_SIZE;
-      const h = (repeater.qubitEnd - repeater.qubitStart + 1) * CELL_SIZE;
+    // Check if pattern can be placed
+    const wouldFit = baseQubit + selectedPattern.qubitSpan <= circuit.numQubits &&
+                     baseColumn + selectedPattern.columnSpan <= numColumns;
 
+    // Render preview outline
+    if (wouldFit) {
       elements.push(
         <div
-          key={`repeater-${repeater.id}`}
-          className={`repeater-block ${isSelected ? 'selected' : ''}`}
+          key="pattern-preview"
           style={{
             position: 'absolute',
-            left: x - 6,
-            top: y - 6,
-            width: w + 12,
-            height: h + 12,
-            border: `3px dashed ${repeater.color}`,
-            borderRadius: 10,
-            backgroundColor: `${repeater.color}15`,
-            cursor: 'pointer',
-            zIndex: isSelected ? 15 : 10,
-            boxShadow: isSelected ? `0 0 0 3px ${repeater.color}50` : 'none',
+            left: baseColumn * CELL_SIZE - 4,
+            top: baseQubit * CELL_SIZE - 4,
+            width: selectedPattern.columnSpan * CELL_SIZE + 8,
+            height: selectedPattern.qubitSpan * CELL_SIZE + 8,
+            border: `3px dashed ${selectedPattern.color}`,
+            borderRadius: 8,
+            backgroundColor: `${selectedPattern.color}20`,
+            pointerEvents: 'none',
+            zIndex: 50,
           }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onRepeaterSelect(repeater.id);
-          }}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            onRepeaterEdit?.(repeater.id);
-          }}
-        >
-          {/* Repeater label - positioned inside at top-left */}
-          <div
-            className="repeater-label"
-            style={{
-              position: 'absolute',
-              top: 4,
-              left: 4,
-              padding: '2px 6px',
-              backgroundColor: repeater.color,
-              color: 'white',
-              borderRadius: 4,
-              fontSize: 10,
-              fontWeight: 600,
-              fontFamily: "'JetBrains Mono', monospace",
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-              whiteSpace: 'nowrap',
-              maxWidth: 'calc(100% - 8px)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            <Repeat size={9} />
-            {repeater.label || 'Repeat'}
-          </div>
-
-          {/* Repetition badge - positioned inside at bottom-right */}
-          <div
-            className="repeater-count"
-            style={{
-              position: 'absolute',
-              bottom: 4,
-              right: 4,
-              padding: '2px 6px',
-              backgroundColor: 'white',
-              color: repeater.color,
-              border: `2px solid ${repeater.color}`,
-              borderRadius: 10,
-              fontSize: 10,
-              fontWeight: 700,
-              fontFamily: "'JetBrains Mono', monospace",
-            }}
-          >
-            ×{repeater.repetitions}
-          </div>
-        </div>
+        />
       );
     }
 
@@ -735,7 +888,7 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
           style={{
             display: 'flex',
             position: 'relative',
-            minHeight: height,
+            minHeight: height + GRID_PADDING * 2,
           }}
         >
           {/* Qubit labels */}
@@ -744,8 +897,11 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
             style={{
               position: 'relative',
               width: QUBIT_LABEL_WIDTH,
-              height: height,
+              height: height + GRID_PADDING * 2,
+              paddingTop: GRID_PADDING,
+              paddingBottom: GRID_PADDING,
               flexShrink: 0,
+              boxSizing: 'border-box',
             }}
           >
             {renderLabels()}
@@ -757,11 +913,12 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
             className="circuit-grid"
             style={{
               position: 'relative',
-              width: width,
-              height: height,
+              width: width + GRID_PADDING * 2,
+              height: height + GRID_PADDING * 2,
+              padding: GRID_PADDING,
               backgroundColor: '#FAFAFA',
               borderRadius: 8,
-              overflow: 'hidden',
+              boxSizing: 'border-box',
             }}
             onClick={handleCanvasClick}
             onMouseDown={handleMouseDown}
@@ -777,34 +934,47 @@ export const CircuitCanvas: React.FC<CircuitCanvasProps> = ({
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
-            {renderGrid()}
-            {renderWires()}
-            {renderRepeaters()}
-            {renderGates()}
+            {/* Content container with padding offset */}
+            <div style={{ position: 'relative', width: width, height: height }}>
+              {renderGrid()}
+              {renderWires()}
+              {renderGates()}
+              {renderPatternPreview()}
 
-            {/* Selection box overlay */}
-            {selectionBox && (
-              <div
-                className="selection-box"
-                style={{
-                  position: 'absolute',
-                  left: Math.min(selectionBox.startX, selectionBox.currentX),
-                  top: Math.min(selectionBox.startY, selectionBox.currentY),
-                  width: Math.abs(selectionBox.currentX - selectionBox.startX),
-                  height: Math.abs(selectionBox.currentY - selectionBox.startY),
-                  border: '2px dashed #4A90D9',
-                  backgroundColor: 'rgba(74, 144, 217, 0.15)',
-                  borderRadius: 4,
-                  pointerEvents: 'none',
-                  zIndex: 100,
-                }}
-              />
-            )}
+              {/* Selection box overlay */}
+              {selectionBox && (
+                <div
+                  className="selection-box"
+                  style={{
+                    position: 'absolute',
+                    left: Math.min(selectionBox.startX, selectionBox.currentX),
+                    top: Math.min(selectionBox.startY, selectionBox.currentY),
+                    width: Math.abs(selectionBox.currentX - selectionBox.startX),
+                    height: Math.abs(selectionBox.currentY - selectionBox.startY),
+                    border: '2px dashed #4A90D9',
+                    backgroundColor: 'rgba(74, 144, 217, 0.15)',
+                    borderRadius: 4,
+                    pointerEvents: 'none',
+                    zIndex: 100,
+                  }}
+                />
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {selectedGate && selectedGateIsTwoQubit && (
+      {selectedPattern && (
+        <div className="placement-hint">
+          Click to place pattern "{selectedPattern.name}" ({selectedPattern.qubitSpan}q × {selectedPattern.columnSpan}c)
+        </div>
+      )}
+      {!selectedPattern && selectedGate && selectedGateIsThreeQubit && (
+        <div className="placement-hint">
+          Click to place {selectedGate} on three adjacent qubits
+        </div>
+      )}
+      {!selectedPattern && selectedGate && selectedGateIsTwoQubit && (
         <div className="placement-hint">
           Click to place {selectedGate} on two adjacent qubits
         </div>

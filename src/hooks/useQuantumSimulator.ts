@@ -3,7 +3,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { ExecutionResults, CircuitState, GateInstance, RepeaterBlock, Complex } from '../types/circuit';
+import { ExecutionResults, CircuitState, Complex } from '../types/circuit';
 import { CIRCUIT_LIMITS, EXECUTION_CONSTANTS } from '../config';
 
 // Complex number utilities
@@ -140,75 +140,6 @@ function getGateMatrix(gateId: string, angle?: number, angles?: number[]): Compl
     default:
       return GATE_MATRICES.I;
   }
-}
-
-/**
- * Expand gates within repeater blocks.
- * Gates inside repeaters are duplicated according to the repetition count,
- * with their column positions adjusted to create sequential copies.
- */
-function expandRepeaters(
-  gates: GateInstance[],
-  repeaters: RepeaterBlock[]
-): GateInstance[] {
-  if (repeaters.length === 0) return gates;
-
-  const expanded: GateInstance[] = [];
-  const gatesInRepeaters = new Set<string>();
-
-  // Sort repeaters by column for proper expansion
-  const sortedRepeaters = [...repeaters].sort(
-    (a, b) => a.columnStart - b.columnStart
-  );
-
-  // Process each repeater
-  for (const repeater of sortedRepeaters) {
-    // Find gates contained within this repeater's bounds
-    const containedGates = gates.filter(g => {
-      // Check if gate's target qubit is within repeater's qubit range
-      const targetInRange = g.target >= repeater.qubitStart && g.target <= repeater.qubitEnd;
-
-      // Check if gate's column is within repeater's column range
-      const columnInRange = g.column >= repeater.columnStart && g.column <= repeater.columnEnd;
-
-      // For two-qubit gates, also check control qubit
-      let controlInRange = true;
-      if (g.control !== undefined) {
-        controlInRange = g.control >= repeater.qubitStart && g.control <= repeater.qubitEnd;
-      }
-
-      return targetInRange && columnInRange && controlInRange;
-    });
-
-    // Calculate the width of the repeater block (for column offset)
-    const blockWidth = repeater.columnEnd - repeater.columnStart + 1;
-
-    // Add repeated copies of contained gates
-    for (let rep = 0; rep < repeater.repetitions; rep++) {
-      for (const gate of containedGates) {
-        gatesInRepeaters.add(gate.id);
-
-        // Calculate new column: original position relative to block start, plus offset for this repetition
-        const relativeColumn = gate.column - repeater.columnStart;
-        const newColumn = repeater.columnStart + relativeColumn + (rep * blockWidth);
-
-        expanded.push({
-          ...gate,
-          id: `${gate.id}_rep${rep}`,
-          column: newColumn,
-        });
-      }
-    }
-  }
-
-  // Add gates that are NOT in any repeater (unchanged)
-  for (const gate of gates) {
-    if (!gatesInRepeaters.has(gate.id)) {
-      expanded.push(gate);
-    }
-  }
-
-  return expanded;
 }
 
 // Hardware information interface
@@ -377,6 +308,78 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
     }
   }, []);
 
+  // Apply multi-controlled gate (for CCX, CCZ, etc.)
+  const applyMultiControlledGate = useCallback((
+    stateReal: Float32Array,
+    stateImag: Float32Array,
+    numQubits: number,
+    controls: number[],
+    target: number,
+    gate: Complex[][]
+  ) => {
+    const dim = 1 << numQubits;
+    // Create mask for all control qubits
+    const controlMask = controls.reduce((m, c) => m | (1 << c), 0);
+    const targetMask = 1 << target;
+
+    for (let i = 0; i < dim; i++) {
+      // Only apply if ALL control qubits are |1⟩
+      if ((i & controlMask) !== controlMask) continue;
+
+      // Only process pairs once (when target bit is 0)
+      if ((i & targetMask) !== 0) continue;
+
+      const idx0 = i;
+      const idx1 = i | targetMask;
+
+      const a0: Complex = { re: stateReal[idx0], im: stateImag[idx0] };
+      const a1: Complex = { re: stateReal[idx1], im: stateImag[idx1] };
+
+      const new0 = complexAdd(complexMul(gate[0][0], a0), complexMul(gate[0][1], a1));
+      const new1 = complexAdd(complexMul(gate[1][0], a0), complexMul(gate[1][1], a1));
+
+      stateReal[idx0] = new0.re;
+      stateImag[idx0] = new0.im;
+      stateReal[idx1] = new1.re;
+      stateImag[idx1] = new1.im;
+    }
+  }, []);
+
+  // Apply controlled-SWAP (Fredkin) gate
+  const applyControlledSwapGate = useCallback((
+    stateReal: Float32Array,
+    stateImag: Float32Array,
+    numQubits: number,
+    control: number,
+    qubit1: number,
+    qubit2: number
+  ) => {
+    const dim = 1 << numQubits;
+    const controlMask = 1 << control;
+    const mask1 = 1 << qubit1;
+    const mask2 = 1 << qubit2;
+
+    for (let i = 0; i < dim; i++) {
+      // Only apply if control qubit is |1⟩
+      if ((i & controlMask) === 0) continue;
+
+      const bit1 = (i & mask1) !== 0 ? 1 : 0;
+      const bit2 = (i & mask2) !== 0 ? 1 : 0;
+
+      // Only swap if bits are different and we haven't processed this pair
+      if (bit1 !== bit2 && bit1 < bit2) {
+        const j = (i ^ mask1) ^ mask2;
+
+        const tempReal = stateReal[i];
+        const tempImag = stateImag[i];
+        stateReal[i] = stateReal[j];
+        stateImag[i] = stateImag[j];
+        stateReal[j] = tempReal;
+        stateImag[j] = tempImag;
+      }
+    }
+  }, []);
+
   // Measure qubit
   const measureQubit = useCallback((
     stateReal: Float32Array,
@@ -414,29 +417,31 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
     return result;
   }, []);
 
-  // Simulate circuit once
+  // Simulate circuit once using pre-allocated buffers
   const simulateOnce = useCallback((
-    circuit: CircuitState
+    circuit: CircuitState,
+    stateReal: Float32Array,
+    stateImag: Float32Array,
+    measurements: number[],
+    measured: boolean[]
   ): string => {
-    const { numQubits, gates, repeaters = [] } = circuit;
-    const dim = 1 << numQubits;
+    const { numQubits, gates } = circuit;
 
-    // Initialize |0...0⟩ state
-    const stateReal = new Float32Array(dim);
-    const stateImag = new Float32Array(dim);
+    // Reset state to |0...0⟩
+    stateReal.fill(0);
+    stateImag.fill(0);
     stateReal[0] = 1;
 
-    // Expand repeaters and sort gates by column
-    const expandedGates = expandRepeaters(gates, repeaters);
-    const sortedGates = [...expandedGates].sort((a, b) => a.column - b.column);
+    // Reset measurement tracking
+    measurements.fill(0);
+    measured.fill(false);
 
-    // Measurement results
-    const measurements: number[] = new Array(numQubits).fill(0);
-    const measured: boolean[] = new Array(numQubits).fill(false);
+    // Sort gates by column
+    const sortedGates = [...gates].sort((a, b) => a.column - b.column);
 
     // Apply gates
     for (const gate of sortedGates) {
-      const { gateId, target, control, angle, angles } = gate;
+      const { gateId, target, control, controls, angle, angles } = gate;
 
       if (gateId === 'M') {
         measurements[target] = measureQubit(stateReal, stateImag, numQubits, target);
@@ -450,6 +455,20 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
       } else if (gateId === 'SWAP') {
         const qubit2 = control ?? target + 1;
         applySwapGate(stateReal, stateImag, numQubits, target, qubit2);
+      } else if (gateId === 'CCX') {
+        // Toffoli gate: two controls, one target
+        const ctrls = controls ?? [target - 2, target - 1];
+        applyMultiControlledGate(stateReal, stateImag, numQubits, ctrls, target, GATE_MATRICES.X);
+      } else if (gateId === 'CCZ') {
+        // CCZ gate: two controls, one target
+        const ctrls = controls ?? [target - 2, target - 1];
+        applyMultiControlledGate(stateReal, stateImag, numQubits, ctrls, target, GATE_MATRICES.Z);
+      } else if (gateId === 'CSWAP') {
+        // Fredkin gate: one control, two swap targets
+        const ctrlQubit = control ?? target - 2;
+        const swap1 = target - 1;
+        const swap2 = target;
+        applyControlledSwapGate(stateReal, stateImag, numQubits, ctrlQubit, swap1, swap2);
       } else {
         const matrix = getGateMatrix(gateId, angle, angles);
         applySingleQubitGate(stateReal, stateImag, numQubits, target, matrix);
@@ -465,7 +484,7 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
 
     // Convert to bitstring (little-endian)
     return measurements.map(b => b.toString()).join('');
-  }, [applySingleQubitGate, applyControlledGate, applySwapGate, measureQubit]);
+  }, [applySingleQubitGate, applyControlledGate, applySwapGate, applyMultiControlledGate, applyControlledSwapGate, measureQubit]);
 
   // Execute circuit with multiple shots using chunked execution to prevent UI blocking
   const executeCircuit = useCallback(async (
@@ -484,13 +503,20 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
       const startTime = performance.now();
       const counts: Record<string, number> = {};
 
+      // Pre-allocate reusable buffers to reduce memory pressure
+      const dim = 1 << circuit.numQubits;
+      const stateReal = new Float32Array(dim);
+      const stateImag = new Float32Array(dim);
+      const measurements = new Array<number>(circuit.numQubits);
+      const measured = new Array<boolean>(circuit.numQubits);
+
       // Chunked execution to prevent UI blocking
       for (let i = 0; i < shots; i += EXECUTION_CONSTANTS.CHUNK_SIZE) {
         const chunkEnd = Math.min(i + EXECUTION_CONSTANTS.CHUNK_SIZE, shots);
 
         // Process chunk
         for (let j = i; j < chunkEnd; j++) {
-          const result = simulateOnce(circuit);
+          const result = simulateOnce(circuit, stateReal, stateImag, measurements, measured);
           counts[result] = (counts[result] || 0) + 1;
         }
 
@@ -500,8 +526,7 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
         }
       }
 
-      // Calculate probabilities
-      const dim = 1 << circuit.numQubits;
+      // Calculate probabilities (reuse dim from buffer allocation)
       const probabilities = new Array(dim).fill(0);
       for (const [bitstring, count] of Object.entries(counts)) {
         const idx = parseInt(bitstring.split('').reverse().join(''), 2);
@@ -538,7 +563,7 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
     }
 
     try {
-      const { numQubits, gates, repeaters = [] } = circuit;
+      const { numQubits, gates } = circuit;
       const dim = 1 << numQubits;
 
       // Initialize |0...0⟩ state
@@ -546,15 +571,14 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
       const stateImag = new Float32Array(dim);
       stateReal[0] = 1;
 
-      // Expand repeaters, filter out measurements, and sort by column
-      const expandedGates = expandRepeaters(gates, repeaters);
-      const sortedGates = [...expandedGates]
+      // Filter out measurements and sort by column
+      const sortedGates = [...gates]
         .filter(g => g.gateId !== 'M')
         .sort((a, b) => a.column - b.column);
 
       // Apply gates
       for (const gate of sortedGates) {
-        const { gateId, target, control, angle, angles } = gate;
+        const { gateId, target, control, controls, angle, angles } = gate;
 
         if (gateId === 'CNOT') {
           const ctrlQubit = control ?? target - 1;
@@ -565,6 +589,17 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
         } else if (gateId === 'SWAP') {
           const qubit2 = control ?? target + 1;
           applySwapGate(stateReal, stateImag, numQubits, target, qubit2);
+        } else if (gateId === 'CCX') {
+          const ctrls = controls ?? [target - 2, target - 1];
+          applyMultiControlledGate(stateReal, stateImag, numQubits, ctrls, target, GATE_MATRICES.X);
+        } else if (gateId === 'CCZ') {
+          const ctrls = controls ?? [target - 2, target - 1];
+          applyMultiControlledGate(stateReal, stateImag, numQubits, ctrls, target, GATE_MATRICES.Z);
+        } else if (gateId === 'CSWAP') {
+          const ctrlQubit = control ?? target - 2;
+          const swap1 = target - 1;
+          const swap2 = target;
+          applyControlledSwapGate(stateReal, stateImag, numQubits, ctrlQubit, swap1, swap2);
         } else {
           const matrix = getGateMatrix(gateId, angle, angles);
           applySingleQubitGate(stateReal, stateImag, numQubits, target, matrix);
@@ -579,7 +614,7 @@ export function useQuantumSimulator(): UseQuantumSimulatorReturn {
       setError(`Failed to compute statevector: ${err}`);
       return null;
     }
-  }, [isReady, applySingleQubitGate, applyControlledGate, applySwapGate]);
+  }, [isReady, applySingleQubitGate, applyControlledGate, applySwapGate, applyMultiControlledGate, applyControlledSwapGate]);
 
   // Reset results
   const reset = useCallback(() => {

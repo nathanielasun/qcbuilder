@@ -13,13 +13,13 @@ import {
   GateSettingsPanel,
   ConfirmDialog,
   PresetCircuits,
-  RepeaterEditor,
-  RepeaterSettingsPanel,
+  PatternPanel,
   HardwareSettingsPanel,
 } from './components';
 import { useCircuitState } from './hooks/useCircuitState';
 import { useQuantumSimulator } from './hooks/useQuantumSimulator';
-import { GateInstance, SavedCircuit, RepeaterBlock } from './types/circuit';
+import { usePatterns } from './hooks/usePatterns';
+import { GateInstance, SavedCircuit } from './types/circuit';
 import { GATE_DEFINITIONS } from './utils/gateDefinitions';
 import './styles/App.css';
 
@@ -35,6 +35,7 @@ export const App: React.FC = () => {
     circuit,
     numColumns,
     addGate,
+    addGates,
     removeGate,
     removeGates,
     moveGate,
@@ -43,14 +44,12 @@ export const App: React.FC = () => {
     updateGateAngle,
     updateGateAngles,
     duplicateGates,
-    addRepeater,
-    removeRepeater,
-    updateRepeater,
     setNumQubits,
     clearCircuit,
     loadCircuit,
     saveCircuit,
     setCircuitName,
+    isCellOccupied,
     undo,
     redo,
     canUndo,
@@ -68,18 +67,30 @@ export const App: React.FC = () => {
     getStatevector,
   } = useQuantumSimulator();
 
+  const {
+    patterns,
+    selectedPattern,
+    selectPattern,
+    createPatternFromGates,
+    deletePattern,
+    renamePattern,
+    applyPattern,
+  } = usePatterns();
+
   const [selectedGate, setSelectedGate] = useState<string | null>(null);
   const [selectedInstances, setSelectedInstances] = useState<Set<string>>(new Set());
-  const [selectedRepeater, setSelectedRepeater] = useState<string | null>(null);
   const [editingGate, setEditingGate] = useState<GateInstance | null>(null);
-  const [editingRepeater, setEditingRepeater] = useState<RepeaterBlock | null>(null);
-  const [isCreatingRepeater, setIsCreatingRepeater] = useState(false);
   const [shots, setShots] = useState(1024);
   const [statevector, setStatevector] = useState<{ real: number[]; imag: number[] } | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [pendingPreset, setPendingPreset] = useState<SavedCircuit | null>(null);
   const [showHardwareSettings, setShowHardwareSettings] = useState(false);
   const clipboardRef = useRef<ClipboardData | null>(null);
+
+  // Get selected gates for pattern creation
+  const selectedGates = useMemo(() => {
+    return circuit.gates.filter(g => selectedInstances.has(g.id));
+  }, [circuit.gates, selectedInstances]);
 
   // Get the selected gate instance (only when single selection)
   const selectedGateInstance = useMemo(() => {
@@ -98,7 +109,8 @@ export const App: React.FC = () => {
   const handleGateSelect = useCallback((gateId: string) => {
     setSelectedGate(prev => prev === gateId ? null : gateId);
     setSelectedInstances(new Set());
-  }, []);
+    selectPattern(null); // Deselect pattern when selecting gate
+  }, [selectPattern]);
 
   // Handle gate instance selection (supports multi-selection with Shift/Ctrl)
   const handleInstanceSelect = useCallback((instanceId: string | null, addToSelection?: boolean) => {
@@ -126,22 +138,52 @@ export const App: React.FC = () => {
     setSelectedGate(null);
   }, []);
 
-  // Handle gate add with validation
+  // Handle pattern selection
+  const handlePatternSelect = useCallback((patternId: string | null) => {
+    selectPattern(patternId);
+    setSelectedGate(null);
+    setSelectedInstances(new Set());
+  }, [selectPattern]);
+
+  // Handle creating a pattern from selected gates
+  const handleCreatePattern = useCallback((gates: GateInstance[], name: string) => {
+    createPatternFromGates(gates, name);
+    setSelectedInstances(new Set());
+  }, [createPatternFromGates]);
+
+  // Handle gate add with validation (also handles pattern placement)
   const handleGateAdd = useCallback((
     gateId: string,
     target: number,
     column: number,
-    control?: number
+    control?: number,
+    controls?: number[]
   ) => {
+    // Check if a pattern is selected
+    if (selectedPattern) {
+      const newGates = applyPattern(
+        selectedPattern,
+        target,
+        column,
+        circuit.numQubits,
+        isCellOccupied
+      );
+      if (newGates && newGates.length > 0) {
+        addGates(newGates);
+        // Optionally deselect pattern after placement
+        // selectPattern(null);
+      }
+      return;
+    }
+
     const def = GATE_DEFINITIONS[gateId];
     const angle = def?.hasAngle ? Math.PI : undefined;
     const angles = def?.hasMultipleAngles ? [Math.PI, 0, 0] : undefined;
-    const validationError = addGate(gateId, target, column, control, angle, angles);
+    const validationError = addGate(gateId, target, column, control, angle, angles, controls);
     if (validationError) {
       console.warn('Gate placement error:', validationError.message);
-      // Optionally show error to user - for now just log
     }
-  }, [addGate]);
+  }, [selectedPattern, applyPattern, circuit.numQubits, isCellOccupied, addGates, addGate]);
 
   // Handle gate edit (for rotation gates - opens angle editor modal)
   const handleGateEdit = useCallback((instanceId: string) => {
@@ -265,62 +307,6 @@ export const App: React.FC = () => {
     setPendingPreset(null);
   }, []);
 
-  // Handle repeater selection
-  const handleRepeaterSelect = useCallback((repeaterId: string | null) => {
-    setSelectedRepeater(repeaterId);
-    setSelectedInstances(new Set());
-    setSelectedGate(null);
-  }, []);
-
-  // Handle repeater edit
-  const handleRepeaterEdit = useCallback((repeaterId: string) => {
-    const repeater = circuit.repeaters.find(r => r.id === repeaterId);
-    if (repeater) {
-      setEditingRepeater(repeater);
-    }
-  }, [circuit.repeaters]);
-
-  // Handle add repeater button click
-  const handleAddRepeaterClick = useCallback(() => {
-    setIsCreatingRepeater(true);
-  }, []);
-
-  // Handle repeater save
-  const handleRepeaterSave = useCallback((updates: Partial<Omit<RepeaterBlock, 'id'>>) => {
-    if (editingRepeater) {
-      updateRepeater(editingRepeater.id, updates);
-    }
-    setEditingRepeater(null);
-  }, [editingRepeater, updateRepeater]);
-
-  // Handle repeater create
-  const handleRepeaterCreate = useCallback((
-    qubitStart: number,
-    qubitEnd: number,
-    columnStart: number,
-    columnEnd: number,
-    repetitions: number,
-    label?: string
-  ) => {
-    addRepeater(qubitStart, qubitEnd, columnStart, columnEnd, repetitions, label);
-    setIsCreatingRepeater(false);
-  }, [addRepeater]);
-
-  // Handle repeater delete
-  const handleRepeaterDelete = useCallback(() => {
-    if (editingRepeater) {
-      removeRepeater(editingRepeater.id);
-      setEditingRepeater(null);
-      setSelectedRepeater(null);
-    }
-  }, [editingRepeater, removeRepeater]);
-
-  // Get the selected repeater instance
-  const selectedRepeaterInstance = useMemo(() => {
-    if (!selectedRepeater) return null;
-    return circuit.repeaters.find(r => r.id === selectedRepeater) || null;
-  }, [selectedRepeater, circuit.repeaters]);
-
   // Copy selected gates to clipboard
   const handleCopy = useCallback(() => {
     if (selectedInstances.size === 0) return;
@@ -354,7 +340,7 @@ export const App: React.FC = () => {
       : -1;
 
     const columnOffset = maxColumn + 1 - minColumn;
-    const qubitOffset = 0; // Paste at same qubit positions (minQubit preserved in clipboard for future use)
+    const qubitOffset = 0; // Paste at same qubit positions
 
     const gateIds = gates.map(g => g.id);
     const { newIds, skipped } = duplicateGates(gateIds, columnOffset, qubitOffset);
@@ -380,20 +366,16 @@ export const App: React.FC = () => {
       }
 
       // Don't handle if a modal is open
-      if (editingGate || editingRepeater || isCreatingRepeater || showClearConfirm) {
+      if (editingGate || showClearConfirm) {
         return;
       }
 
-      // Delete/Backspace - remove selected gates or repeater
+      // Delete/Backspace - remove selected gates
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedInstances.size > 0) {
           e.preventDefault();
           removeGates([...selectedInstances]);
           setSelectedInstances(new Set());
-        } else if (selectedRepeater) {
-          e.preventDefault();
-          removeRepeater(selectedRepeater);
-          setSelectedRepeater(null);
         }
       }
 
@@ -401,7 +383,7 @@ export const App: React.FC = () => {
       if (e.key === 'Escape') {
         setSelectedInstances(new Set());
         setSelectedGate(null);
-        setSelectedRepeater(null);
+        selectPattern(null);
       }
 
       // Ctrl/Cmd + C - Copy
@@ -423,7 +405,6 @@ export const App: React.FC = () => {
         e.preventDefault();
         setSelectedInstances(new Set(circuit.gates.map(g => g.id)));
         setSelectedGate(null);
-        setSelectedRepeater(null);
       }
 
       // Ctrl/Cmd + Z - Undo
@@ -472,6 +453,7 @@ export const App: React.FC = () => {
           const gateId = quickGates[gateIndex];
           setSelectedGate(prev => prev === gateId ? null : gateId);
           setSelectedInstances(new Set());
+          selectPattern(null);
         }
       }
     };
@@ -481,13 +463,9 @@ export const App: React.FC = () => {
   }, [
     selectedInstances,
     selectedGate,
-    selectedRepeater,
     editingGate,
-    editingRepeater,
-    isCreatingRepeater,
     showClearConfirm,
     removeGates,
-    removeRepeater,
     handleCopy,
     handlePaste,
     circuit.gates,
@@ -499,6 +477,7 @@ export const App: React.FC = () => {
     isReady,
     isExecuting,
     handleExecute,
+    selectPattern,
   ]);
 
   return (
@@ -524,6 +503,15 @@ export const App: React.FC = () => {
           <GatePalette
             onGateSelect={handleGateSelect}
             selectedGate={selectedGate}
+          />
+          <PatternPanel
+            patterns={patterns}
+            selectedPattern={selectedPattern}
+            selectedGates={selectedGates}
+            onSelectPattern={handlePatternSelect}
+            onCreatePattern={handleCreatePattern}
+            onDeletePattern={deletePattern}
+            onRenamePattern={renamePattern}
           />
           <PresetCircuits onLoadPreset={handlePresetLoad} />
           <div className="keyboard-hints">
@@ -558,7 +546,6 @@ export const App: React.FC = () => {
             onSave={saveCircuit}
             onLoad={loadCircuit}
             onNameChange={setCircuitName}
-            onAddRepeater={handleAddRepeaterClick}
           />
 
           <div className="circuit-area">
@@ -566,16 +553,14 @@ export const App: React.FC = () => {
               circuit={circuit}
               numColumns={numColumns}
               selectedGate={selectedGate}
+              selectedPattern={selectedPattern}
               selectedInstances={selectedInstances}
-              selectedRepeater={selectedRepeater}
               onGateAdd={handleGateAdd}
               onGateMove={moveGate}
               onGateSelect={handleInstanceSelect}
               onMultiSelect={handleMultiSelect}
               onGateRemove={removeGate}
               onGateEdit={handleGateEdit}
-              onRepeaterSelect={handleRepeaterSelect}
-              onRepeaterEdit={handleRepeaterEdit}
             />
 
             {/* Gate Settings Panel - shows when a single gate is selected */}
@@ -607,19 +592,6 @@ export const App: React.FC = () => {
                   </button>
                 </div>
               </div>
-            )}
-
-            {/* Repeater Settings Panel - shows when a repeater is selected */}
-            {selectedRepeaterInstance && (
-              <RepeaterSettingsPanel
-                repeater={selectedRepeaterInstance}
-                onEdit={() => handleRepeaterEdit(selectedRepeaterInstance.id)}
-                onRemove={() => {
-                  removeRepeater(selectedRepeaterInstance.id);
-                  setSelectedRepeater(null);
-                }}
-                onClose={() => setSelectedRepeater(null)}
-              />
             )}
           </div>
 
@@ -670,22 +642,6 @@ export const App: React.FC = () => {
           variant="warning"
           onConfirm={handlePresetConfirm}
           onCancel={handlePresetCancel}
-        />
-      )}
-
-      {(editingRepeater || isCreatingRepeater) && (
-        <RepeaterEditor
-          repeater={editingRepeater}
-          numQubits={circuit.numQubits}
-          numColumns={numColumns}
-          isCreating={isCreatingRepeater}
-          onSave={handleRepeaterSave}
-          onCreate={handleRepeaterCreate}
-          onDelete={handleRepeaterDelete}
-          onClose={() => {
-            setEditingRepeater(null);
-            setIsCreatingRepeater(false);
-          }}
         />
       )}
 

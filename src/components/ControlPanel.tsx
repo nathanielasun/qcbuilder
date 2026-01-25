@@ -6,6 +6,10 @@ import React, { useState, useCallback } from 'react';
 import { Play, Trash2, Download, Upload, Undo2, Redo2, Plus, Minus, Settings } from 'lucide-react';
 import { SavedCircuit } from '../types/circuit';
 import { validateSavedCircuit } from '../utils/circuitValidator';
+import { CIRCUIT_LIMITS } from '../config';
+
+// Preset shot values for quick selection
+const SHOT_PRESETS = [100, 1024, 4096, 10000] as const;
 
 interface ControlPanelProps {
   numQubits: number;
@@ -43,6 +47,47 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onNameChange,
 }) => {
   const [showSettings, setShowSettings] = useState(false);
+  const [shotsInput, setShotsInput] = useState(shots.toString());
+
+  // Handle shots input change with validation
+  const handleShotsInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setShotsInput(value);
+
+    const numValue = parseInt(value, 10);
+    if (!isNaN(numValue) && numValue >= CIRCUIT_LIMITS.MIN_SHOTS && numValue <= CIRCUIT_LIMITS.MAX_SHOTS) {
+      onShotsChange(numValue);
+    }
+  }, [onShotsChange]);
+
+  // Handle blur - validate and correct input
+  const handleShotsBlur = useCallback(() => {
+    const numValue = parseInt(shotsInput, 10);
+    if (isNaN(numValue) || numValue < CIRCUIT_LIMITS.MIN_SHOTS) {
+      setShotsInput(CIRCUIT_LIMITS.MIN_SHOTS.toString());
+      onShotsChange(CIRCUIT_LIMITS.MIN_SHOTS);
+    } else if (numValue > CIRCUIT_LIMITS.MAX_SHOTS) {
+      setShotsInput(CIRCUIT_LIMITS.MAX_SHOTS.toString());
+      onShotsChange(CIRCUIT_LIMITS.MAX_SHOTS);
+    } else {
+      setShotsInput(numValue.toString());
+      onShotsChange(numValue);
+    }
+  }, [shotsInput, onShotsChange]);
+
+  // Handle preset selection
+  const handlePresetClick = useCallback((preset: number) => {
+    setShotsInput(preset.toString());
+    onShotsChange(preset);
+  }, [onShotsChange]);
+
+  // Handle keyboard events
+  const handleShotsKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleShotsBlur();
+      (e.target as HTMLInputElement).blur();
+    }
+  }, [handleShotsBlur]);
 
   const handleSave = useCallback(() => {
     const circuit = onSave();
@@ -197,20 +242,35 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
 
           {/* Shots control */}
-          <div className="setting-row">
+          <div className="setting-row shots-row">
             <label>Shots</label>
-            <select
-              value={shots}
-              onChange={(e) => onShotsChange(Number(e.target.value))}
-            >
-              <option value={100}>100</option>
-              <option value={256}>256</option>
-              <option value={512}>512</option>
-              <option value={1024}>1024</option>
-              <option value={2048}>2048</option>
-              <option value={4096}>4096</option>
-              <option value={8192}>8192</option>
-            </select>
+            <div className="shots-control">
+              <input
+                type="number"
+                className="shots-input"
+                value={shotsInput}
+                onChange={handleShotsInputChange}
+                onBlur={handleShotsBlur}
+                onKeyDown={handleShotsKeyDown}
+                min={CIRCUIT_LIMITS.MIN_SHOTS}
+                max={CIRCUIT_LIMITS.MAX_SHOTS}
+              />
+              <div className="shots-presets">
+                {SHOT_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    className={`preset-btn ${shots === preset ? 'active' : ''}`}
+                    onClick={() => handlePresetClick(preset)}
+                    title={`Set to ${preset.toLocaleString()} shots`}
+                  >
+                    {preset >= 1000 ? `${preset / 1000}k` : preset}
+                  </button>
+                ))}
+              </div>
+              <span className="shots-range">
+                {CIRCUIT_LIMITS.MIN_SHOTS.toLocaleString()} - {CIRCUIT_LIMITS.MAX_SHOTS.toLocaleString()}
+              </span>
+            </div>
           </div>
         </div>
       )}

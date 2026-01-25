@@ -295,6 +295,84 @@
   color: #2C3E50;
 }
 
+/* Shots control */
+.shots-row {
+  flex-direction: column;
+  align-items: flex-start !important;
+  gap: 8px !important;
+}
+
+.shots-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.shots-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #E0E0E0;
+  border-radius: 6px;
+  background: white;
+  font-size: 14px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #2C3E50;
+  text-align: center;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.shots-input:focus {
+  outline: none;
+  border-color: #4A90D9;
+  box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.1);
+}
+
+.shots-input::-webkit-inner-spin-button,
+.shots-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.shots-input[type=number] {
+  -moz-appearance: textfield;
+}
+
+.shots-presets {
+  display: flex;
+  gap: 4px;
+}
+
+.preset-btn {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #E0E0E0;
+  border-radius: 4px;
+  background: #F8F9FA;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #7F8C8D;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.preset-btn:hover {
+  background: #E8E8E8;
+  color: #2C3E50;
+}
+
+.preset-btn.active {
+  background: #4A90D9;
+  border-color: #4A90D9;
+  color: white;
+}
+
+.shots-range {
+  font-size: 10px;
+  color: #95A5A6;
+  text-align: center;
+}
+
 /* Circuit Canvas */
 .circuit-canvas-container {
   flex: 1;
